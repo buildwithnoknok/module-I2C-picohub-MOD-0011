@@ -23,7 +23,9 @@
  *   - The noknok I2C module interface on bus A (i2c_module.h, DEV-122): enumeration as type 0x07,
  *     telemetry, steering commands. Input voltage by demand (9 -> 15 -> 20 V and back) and the
  *     brain's minimum input voltage.
- * Not here yet: the bootloader (DEV-124).
+ *   - Field update over I2C (DEV-124): the noknok I2C bootloader (stage-0 + stage-1, layout 3) sits
+ *     below this app. 0xB0 resets into it; the app header below lets it refuse foreign images; the
+ *     boot-attempt counter is cleared once the brain reaches us (i2c_module.h).
  *
  * Debug link (`minichlink -T`, see ../readme.md): a status line every 2 s, and keys
  *   s status now   v cycle the voltage target 9 -> 15 -> 20 -> 9 V (bench test only)
@@ -47,8 +49,18 @@
 #include "usbpd.h"
 
 #define FW_VERSION_MAJOR 0
-#define FW_VERSION_MINOR 2
+#define FW_VERSION_MINOR 3
+#ifndef FW_VERSION_PATCH   // overridable for a bench test image: make EXTRA_CFLAGS=-DFW_VERSION_PATCH=1
 #define FW_VERSION_PATCH 0
+#endif
+
+// noknok bootloader application header (DEV-124): 16 bytes at app base + 0x200 (placed by app.ld).
+// The X035 stage-1 checks magic "NKA1", target "X035" and flash layout 3 before it accepts an
+// image (error 9 otherwise), so an image built for another chip or layout is never booted.
+typedef struct { uint32_t magic, target, layout, version; } app_hdr_t;
+__attribute__( ( section( ".app_hdr" ), used ) )
+const app_hdr_t app_hdr = { 0x31414B4Eu, 0x35333058u, 3,
+	( 1u << 24 ) | ( FW_VERSION_MAJOR << 16 ) | ( FW_VERSION_MINOR << 8 ) | FW_VERSION_PATCH };
 
 // Print only while a debugger is attached: without one, the first printf would stall ~200 ms,
 // long enough to miss a USB-PD reply deadline.
@@ -134,6 +146,7 @@ static struct
 #define RST_PORF  ( 1u << 27 )
 #define RST_SFTF  ( 1u << 28 )
 #define RST_IWDGF ( 1u << 29 )
+#define RST_ANY   0xFC000000u   // bits 26..31: pin, power-on, software, IWDG, WWDG, low-power
 
 // "release" = input, the board's own pull decides; that is the hardware default of every line.
 static void line_release( int pin )    { funPinMode( pin, GPIO_CFGLR_IN_FLOAT ); }
@@ -311,7 +324,7 @@ static uint32_t pr_boot_ms;   // when main() started (set once)
 // are a few hundred bytes at 0x20000000) and below the stack (top 0x20004FF0).
 #define EVLOG_MAGIC 0x4E4B5044u   // "NKPD"
 #define EVLOG_N     96   // 8 B each: 0x20004000..0x20004307, far below the stack
-enum { EV_BOOT = 1, EV_STATE, EV_CAPS, EV_REQ, EV_CONTRACT, EV_REJECT, EV_TIMEOUT, EV_SOFTRST, EV_HARDRST, EV_NOPD, EV_FAILED, EV_RAILS, EV_INPUTS, EV_I2C_ADDR, EV_PICO_RESET, EV_CYCLE, EV_LEVEL };
+enum { EV_BOOT = 1, EV_STATE, EV_CAPS, EV_REQ, EV_CONTRACT, EV_REJECT, EV_TIMEOUT, EV_SOFTRST, EV_HARDRST, EV_NOPD, EV_FAILED, EV_RAILS, EV_INPUTS, EV_I2C_ADDR, EV_PICO_RESET, EV_CYCLE, EV_LEVEL, EV_ENTER_BL };
 typedef struct { uint32_t magic, n; struct { uint32_t ms; uint16_t code, val; } e[EVLOG_N]; } evlog_t;
 #define EVLOG ( (volatile evlog_t *)0x20004000 )
 static void ev( uint16_t code, uint16_t val )
@@ -323,14 +336,14 @@ static void ev( uint16_t code, uint16_t val )
 static void ev_print( void )
 {
 	static const char * names[] = { "?", "boot", "state", "caps", "request", "contract", "reject",
-	                                "timeout", "soft-reset", "hard-reset", "no-PD", "PD-failed", "rails", "inputs", "i2c-addr", "pico-reset", "cycle", "target" };
+	                                "timeout", "soft-reset", "hard-reset", "no-PD", "PD-failed", "rails", "inputs", "i2c-addr", "pico-reset", "cycle", "target", "enter-bl" };
 	uint32_t n = EVLOG->n, first = n > EVLOG_N ? n - EVLOG_N : 0;
 	LOG( "PD event log (%lu events):", (unsigned long)n );
 	for( uint32_t k = first; k < n; k++ )
 	{
 		uint32_t i = k % EVLOG_N;
 		uint16_t c = EVLOG->e[i].code;
-		LOG( " %lu:%s=%u", (unsigned long)EVLOG->e[i].ms, names[c < 18 ? c : 0], EVLOG->e[i].val );
+		LOG( " %lu:%s=%u", (unsigned long)EVLOG->e[i].ms, names[c < 19 ? c : 0], EVLOG->e[i].val );
 	}
 	LOG( "\n" );
 }
@@ -834,7 +847,9 @@ int main( void )
 	USBPD_Init( eUSBPD_VCC_3V3 );
 	USBPD_Reset();
 	demand_mv = cold ? 9000 : ( mv_to_level( hub.vin_mv ) > 9000 ? mv_to_level( hub.vin_mv ) : 9000 );
-	i2c_module_start( cold, millis() );
+	// No reset flag at all = started by the bootloader after a visit to its flash mode (stage-1 clears
+	// the flags there; every real reset sets one): a firmware update or the brain's bootloader query.
+	i2c_module_start( cold, ( flags & RST_ANY ) == 0, millis() );
 	iwdg_start();
 
 	LOG( "\nnoknok PicoHub MOD-0011 power manager v%d.%d.%d  reset 0x%08lx (%s)\n",

@@ -2,7 +2,7 @@
 
 **noknok ID: MOD-0011.** The noknok PicoHub: a carrier board for the Raspberry Pi Pico 2 W (the noknok
 brain) with its own power manager. Status: rev 1.0 built and brought up (October 2026); power-manager
-firmware v0.2.0.
+firmware v0.3.0, updatable over I2C from the brain (noknok I2C bootloader, flash layout 3).
 
 ## What it is
 

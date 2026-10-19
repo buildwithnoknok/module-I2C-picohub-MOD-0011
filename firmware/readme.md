@@ -7,7 +7,7 @@ Design: ADR-004 and the design page "MOD-0011 power manager - I2C interface and 
 The board works with **no firmware at all** (buses, buck and Pico run on any USB-C charger). The firmware
 adds the USB-PD contract, the USB host port J2, the mezzanine 5 V, and protection.
 
-## What it does (v0.2, DEV-121 + DEV-122)
+## What it does (v0.3, DEV-121 + DEV-122 + DEV-124)
 
 | Area | Behaviour |
 | --- | --- |
@@ -19,13 +19,14 @@ adds the USB-PD contract, the USB host port J2, the mezzanine 5 V, and protectio
 | Over-current | Input current above the contract's current (max 3 A) for 0.2 s: J2 off, then the mezzanine. The buck and the buses stay on so the Pico can keep running. Loads return 5 s after the current is back under 80 %. |
 | Temperature (NTC next to the buck) | > 75 C notice, > 85 C J2 and the mezzanine off (back < 75 C), > 95 C buck off (back < 70 C). Three sheds within 10 minutes: the mezzanine stays off until the faults are cleared. The input voltage is never lowered for heat (that would raise the current through the board). |
 | Watchdog | ~1 s independent watchdog. |
+| Firmware update | Over I2C from the brain, through the noknok I2C bootloader (DEV-124), see "Firmware update" below. |
 
 | Input voltage (v0.2) | Chosen by the board by demand: 9 V; up to 15 then 20 V when the input current stays above 80 % of the contract for 2 s; one level down when the input power stays below 60 % of the next lower level for 30 s. The brain may set a **minimum** (15/20 V) for a mezzanine that needs it; heat never lowers the voltage. |
 
 **All thresholds are placeholders** until the load tests (DEV-117 step 6); they live at the top of
 `src/picohub.c`.
 
-## I2C interface (v0.2.0, DEV-122) - the command map
+## I2C interface (v0.3.0, DEV-122 + DEV-124) - the command map
 
 This section is the authoritative spec of the power manager's I2C protocol. Design reasoning is
 recorded in noknok's decision record ADR-004. Principle: everything inside the board is decided by the
@@ -48,7 +49,7 @@ too little power, 3 invalid (bad length, value or key), 0xFF unknown command.
 | Cmd | Name | Write | Read |
 | --- | --- | --- | --- |
 | `0xB1` | GET_VERSION | `[0xB1]` | 4 B: protocol 1, major, minor, patch |
-| `0xB0` | ENTER_BOOTLOADER | `[0xB0]` | result 3 until the X035 bootloader exists (DEV-124) |
+| `0xB0` | ENTER_BOOTLOADER | `[0xB0]` | result 0; ~20 ms later the X035 resets into its bootloader at `0x7E` (see "Firmware update") |
 | `0x10` | GET_STATUS | `[0x10]` | 20 B, see below |
 | `0x11` | GET_SOURCE_CAPS | `[0x11]` | 1 B count n, n x {mV u16, max mA u16} (fixed PDOs), CRC8 |
 | `0x12` | CLEAR_FAULTS | `[0x12]` | result. Clears latched faults and a 3-sheds suspension |
@@ -96,11 +97,43 @@ Bench test: `test/picohub_i2c_test.py` (runs on the Pico, 22 checks); `test/cond
 
 ## Flash layout
 
-The app is linked at **0x1400**, the noknok bootloader's app base (same layout as the CH32V003
-modules), so it needs no relink when the X035 bootloader (DEV-124) arrives. Until then
-`tools/mk_swd_image.py` puts a 4-byte jump (`j 0x1400`) at 0x0000. Top 16 B of RAM
-(0x20004FF0) are reserved for the bootloader handoff cell; the last 1 KB of flash (0xF400) for
-the bootloader metadata.
+Flash layout **3** (the CH32X035 port of the noknok I2C bootloader, repo `module-I2C-bootloader`,
+`firmware/port/port_ch32x035.h` is the authoritative map):
+
+| Address | Size | What |
+| --- | --- | --- |
+| `0x0000` | 1 KB | stage-0 (frozen at the factory) |
+| `0x0400` | 4 KB | stage-1 bootloader (updatable over I2C) |
+| `0x1400` | 56 KB | this app (`src/app.ld`), app header at `0x1600` |
+| `0xF400` | 256 B | bootloader control block |
+| `0xF500` | 256 B | app metadata (length + CRC32, written by the bootloader) |
+
+Top 16 B of RAM (`0x20004FF0`) are the bootloader's no-init cells (handoff, boot-attempt counters);
+the stack ends below them. The app's own RAM cells: event log `0x20004000`, keep cell `0x20004400`.
+
+## Firmware update (DEV-124)
+
+The brain updates the power manager like any noknok I2C module: it compares `0xB1` with this repo's
+`index.json`, checks the bootloader's flash layout (3) against the image's, sends `0xB0`, then
+ERASE / WRITE_CHUNK / VERIFY / BOOT at `0x7E` (protocol: Ecosystem `software/firmware-update.md`).
+An app update takes about 3 s. Things specific to this board:
+
+- **While the X035 sits in its bootloader the board keeps running on its hardware defaults:** buses
+  A and B on, 5 V buck on (the Pico keeps running), J2 VBUS and MEZZ_EN off, no protection, no
+  voltage changes. The charger keeps the contract it had; nothing answers USB-PD meanwhile (bench:
+  120 s at a 9 V contract without the charger switching off). The new app re-reads the charger's
+  capabilities with a PD soft reset when it starts.
+- **Status LED in the bootloader:** slow even blink (0.5 s on / 0.5 s off).
+- After a visit to the bootloader the app keeps the brain's wishes (bus B, J2, MEZZ_EN, minimum
+  voltage) but enumerates again at `0x7F`; the brain gives it back its usual address.
+- The bootloader refuses an image that is not an X035 app for layout 3 (error 9), so a module's
+  image can never land on this chip. Power loss during an update leaves the X035 parked at `0x7E`;
+  the brain's start-up rescue pushes the app again (bench: 7 power cuts during updates, 7 recoveries).
+- After three watchdog resets in a row without the brain ever reaching the app, the bootloader stops
+  starting it and waits at `0x7E` (error 7) for a new image.
+
+Bench tests: `test/bl_x035_bench.py` (runs on the brain; update, chip guard, interrupted update,
+stage-1 self-update, USB-PD silence, power-pull loop).
 
 ## Build and flash
 
@@ -108,7 +141,7 @@ Needs [ch32fun](https://github.com/cnlohr/ch32fun) (RISC-V GCC toolchain + `mini
 
 ```bash
 cd firmware/src
-make CH32FUN_DIR=/path/to/ch32fun    # picohub.bin (app @0x1400) + picohub_swd.bin (stub + app)
+make CH32FUN_DIR=/path/to/ch32fun BOOTLOADER=/path/to/module-I2C-bootloader/firmware  # picohub.bin + picohub_swd.bin
 make swd CH32FUN_DIR=/path/to/ch32fun  # flash picohub_swd.bin through J8 with the WCH-LinkE
 ```
 
@@ -117,7 +150,10 @@ Flash through **J8** (bottom side: GND, SWDIO, 3V3, SWCLK) with the board powere
 answers PD, and some chargers then switch off until they are unplugged. Do not power the board from
 the programmer (`-3`). Verify with a readback
 (`minichlink -r rb.bin flash <size>` and `cmp`). `bin/picohub_swd.bin` is the image to flash on a
-bench or in the factory; `bin/picohub.bin` is the app alone (the future OTA payload).
+bench or in the factory: stage-0 + stage-1 + app + metadata over the whole 62 KB, so nothing stale
+survives. `bin/picohub.bin` is the app alone, linked at `0x1400`: the over-the-air update image. The
+bootloader binaries come from repo `module-I2C-bootloader` (`firmware/bin/noknok_stage0_x035.bin`,
+`noknok_stage1_x035.bin`). After the factory flash, updates go over I2C; SWD is only for recovery.
 
 ## Event log (read after the fact)
 

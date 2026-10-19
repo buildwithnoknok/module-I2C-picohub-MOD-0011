@@ -4,6 +4,21 @@ Newest first. One entry per version bump, written in the same commit as the bump
 `## <version> - <date>` then `- DEV-xx - what changed and why. Breaking: yes/no.`
 Convention: Confluence "Development Conventions" (SD space, page 120160257).
 
+## 0.3.0 - 2026-10-19
+
+- DEV-124 - Field update over I2C: the power manager now runs behind the noknok I2C bootloader
+  (stage-0 + stage-1, CH32X035 port, flash layout 3; built in repo `module-I2C-bootloader`).
+  `0xB0 ENTER_BOOTLOADER` now works (result 0, then a reset into the bootloader at 0x7E); the brain
+  updates the app like any noknok module (`firmware/index.json`, layout 3). The image carries an app
+  header (`NKA1`, target `X035`, layout 3) so the bootloader refuses an image for another chip. The
+  boot-attempt counter is cleared when the brain assigns or reaches the address (three watchdog
+  resets in a row without that park the board's power manager in the bootloader). After a visit to
+  the bootloader the app keeps the brain's wishes but enumerates again at 0x7F, like every module
+  after an update. `bin/picohub_swd.bin` is now the full factory image (stage-0 + stage-1 + app +
+  metadata, built with the bootloader repo's `mk_full.py --chip x035`); `tools/mk_swd_image.py`
+  (the old jump stub) is gone. Bench test `test/bl_x035_bench.py`. Breaking: a board with the 0.2.0
+  jump-stub image needs one SWD flash of `bin/picohub_swd.bin` (rev 1.0 bench boards only).
+
 ## 0.2.0 - 2026-10-19
 
 - DEV-122 - The power manager is now a standard noknok I2C module on bus A (`src/i2c_module.h`):

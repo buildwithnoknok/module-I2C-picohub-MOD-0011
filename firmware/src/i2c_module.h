@@ -10,7 +10,7 @@
  *     Conductor assigns with [0x1D, addr]. Not assigned within 200 ms -> short re-backoff.
  *   - The assigned address and the brain's wishes are kept in a RAM cell over a warm reset of the
  *     X035 (watchdog, debugger), so the brain never loses the power manager; a power-on clears it.
- *   - Command map (README.md of this repo): 0xB1 GET_VERSION, 0xB0 (ignored until DEV-124),
+ *   - Command map (README.md of this repo): 0xB1 GET_VERSION, 0xB0 ENTER_BOOTLOADER (DEV-124),
  *     0x10 GET_STATUS, 0x11 GET_SOURCE_CAPS, 0x12 CLEAR_FAULTS, 0x20 SET_RAIL, 0x21 CYCLE_RAIL,
  *     0x22 RESET_PICO, 0x23 SET_MIN_INPUT_VOLTAGE.
  * Every command is decoded in the I2C ISR at STOP; anything that switches hardware is handed to
@@ -34,6 +34,12 @@
 #define STATUS_FORMAT    1
 
 enum { RES_APPLIED = 0, RES_INTERLOCK = 1, RES_FAULT_POWER = 2, RES_INVALID = 3 };
+
+// The noknok I2C bootloader contract (DEV-124; module-I2C-bootloader, port_ch32x035.h). The top 16 B
+// of RAM are no-init cells shared with the bootloader: F0 handoff, F4 stage-0 attempts, F8 app attempts.
+#define BL_HANDOFF_CELL  ( *(volatile uint32_t *)0x20004FF0 )   // 0xB0: write the magic, then reset
+#define BL_HANDOFF_MAGIC 0x6E6B4231u                            // "nkB1": stage-1 stays in flash mode
+#define BL_APP_ATTEMPTS  ( *(volatile uint32_t *)0x20004FF8 )   // stage-1 counts boots; cleared = healthy
 enum { RAILID_BUS_A = 0, RAILID_BUS_B = 1, RAILID_J2 = 2, RAILID_MEZZ = 3 };
 
 #define UID_ADDR ( (volatile uint8_t *)0x1FFFF7E8 )   // ESIG UID0 + UID1, 8 bytes (as on the V003)
@@ -61,6 +67,7 @@ static volatile int8_t act_cycle_rail = -1;
 static volatile uint16_t act_cycle_ms;
 static volatile bool act_reset_pico;
 static volatile uint16_t act_reset_ms;
+static volatile bool act_enter_bl;
 
 static uint8_t crc8( const volatile uint8_t * d, uint8_t len )   // polynomial 0x07, init 0
 {
@@ -151,12 +158,16 @@ static void decode_command( void )
 {
 	uint8_t c = rx_buf[0];
 	read_kind = RD_RESULT;
+	// The brain reaches us at our assigned address: I2C demonstrably works, so this app is healthy.
+	// Clearing the counter tells stage-1 not to count the next watchdog reset towards parking it
+	// (three watchdog resets in a row without this -> stage-1 parks at 0x7E, error 7).
+	BL_APP_ATTEMPTS = 0;
 	switch( c )
 	{
 	case CMD_GET_VERSION: read_kind = RD_VERSION; return;
 	case CMD_GET_STATUS:  read_kind = RD_STATUS; return;
 	case CMD_GET_CAPS:    read_kind = RD_CAPS; return;
-	case CMD_ENTER_BOOTLOADER: last_result = RES_INVALID; return;   // no bootloader yet (DEV-124)
+	case CMD_ENTER_BOOTLOADER: act_enter_bl = true; last_result = RES_APPLIED; return;   // main loop resets
 	case CMD_CLEAR_FAULTS: act_clear = true; last_result = RES_APPLIED; return;
 
 	case CMD_SET_RAIL:
@@ -330,14 +341,16 @@ static bool keep_valid( void )
 }
 
 // Called once from main(). Cold start: enumerate. Warm start with a valid cell: go straight back
-// to the assigned address and the brain's wishes.
-static void i2c_module_start( bool cold, uint32_t now )
+// to the assigned address and the brain's wishes. After the bootloader (a firmware update or the
+// brain's bootloader query, DEV-124) keep the wishes but enumerate again, like every noknok module
+// after a flash: the brain re-enumerates right after BOOT and finds us at 0x7F, whatever the timing.
+static void i2c_module_start( bool cold, bool from_bootloader, uint32_t now )
 {
 	if( !cold && keep_valid() )
 	{
 		hub.wish_bus_b = KEEP->wish_bus_b; hub.wish_j2 = KEEP->wish_j2; hub.wish_mezz = KEEP->wish_mezz;
 		hub.min_mv = KEEP->min_mv;
-		if( KEEP->addr >= 0x08 && KEEP->addr <= 0x77 )
+		if( !from_bootloader && KEEP->addr >= 0x08 && KEEP->addr <= 0x77 )
 		{
 			i2c_slave_init( KEEP->addr );
 			i2c_state = I2C_ASSIGNED;
@@ -372,12 +385,29 @@ static void i2c_module_step( uint32_t now )
 		I2C1->CTLR1 |= I2C_CTLR1_ACK | I2C_CTLR1_PE;
 		i2c_addr = i2c_new_addr;
 		i2c_state = I2C_ASSIGNED;
+		BL_APP_ATTEMPTS = 0;   // enumeration completed: healthy (bootloader contract)
 		ev( EV_I2C_ADDR, i2c_addr );
 		LOG( "I2C: assigned address 0x%02x\n", i2c_addr );
 	}
 
 	// ---- actions from commands
 	if( act_clear ) { act_clear = false; clear_faults(); }
+
+	// ENTER_BOOTLOADER (0xB0): 20 ms for the I2C transaction to finish, then the handoff magic and a
+	// software reset. Stage-1 then waits at 0x7E for the new image. While it does, nothing runs the
+	// policy: every line is released, i.e. the hardware defaults (bus A + B on, buck on, J2 and
+	// MEZZ_EN off). The charger keeps the contract it has (9 V by default); the new app re-reads the
+	// capabilities with a soft reset at its warm start. The brain's wishes and our address stay in
+	// the KEEP cell, so the new app comes back at the same address.
+	static uint32_t enter_bl_at;
+	if( act_enter_bl && !enter_bl_at ) { enter_bl_at = now + 20; if( !enter_bl_at ) enter_bl_at = 1; ev( EV_ENTER_BL, 0 ); }
+	if( enter_bl_at && (int32_t)( now - enter_bl_at ) >= 0 )
+	{
+		keep_save();
+		__disable_irq();
+		BL_HANDOFF_CELL = BL_HANDOFF_MAGIC;
+		NVIC_SystemReset();
+	}
 
 	if( act_reset_pico && !reset_running ) { act_reset_pico = false; reset_running = true; reset_start = now + 50; }
 	if( reset_running && (int32_t)( now - reset_start ) >= 0 )

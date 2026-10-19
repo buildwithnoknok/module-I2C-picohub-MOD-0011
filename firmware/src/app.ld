@@ -5,10 +5,10 @@
  * decision 4), so nothing is relinked when the X035 bootloader port (DEV-124) lands.
  * Same layout as the CH32V003 modules (layout 2):
  *
- *   0x0000_0000  stage-0 / stage-1 bootloader   5 KB  (until DEV-124: a 4-byte jump stub,
- *                                                     see tools/mk_swd_image.py)
+ *   0x0000_0000  stage-0 / stage-1 bootloader   5 KB  (module-I2C-bootloader, X035 port, layout 3)
  *   0x0000_1400  application                    this image, up to 56 KB
- *   0x0000_F400  metadata                       last 1 KB of the 62 KB flash (reserved)
+ *   0x0000_F400  bootloader control block       256 B
+ *   0x0000_F500  app metadata                   256 B  (rest of the last 1 KB free)
  *
  * 0x1400 is 1 KB aligned, which keeps the vector table on a 1 KB boundary (mtvec).
  * The top 16 bytes of RAM (0x20004FF0) are reserved for the bootloader handoff cell,
@@ -32,6 +32,16 @@ SECTIONS
    _einit = .;
   } >FLASH AT>FLASH
   ASSERT( (ADDR(.init) & 0x3FF) == 0, "vector table must start on a 1 KB boundary" )
+  /* noknok bootloader application header (DEV-124) at a FIXED app base + 0x200, just past the
+   * vector table (312 B). The X035 stage-1 reads it there at VERIFY. The explicit AT() keeps the
+   * load address equal to the address (AT>FLASH would continue from the end of .init). */
+  .app_hdr ORIGIN(FLASH) + 0x200 : AT(ORIGIN(FLASH) + 0x200)
+  {
+   KEEP(*(.app_hdr))
+  } >FLASH
+  ASSERT( SIZEOF(.init) <= 0x200, "vector table has grown into the app header slot" )
+  ASSERT( ADDR(.app_hdr) == ORIGIN(FLASH) + 0x200 && LOADADDR(.app_hdr) == ADDR(.app_hdr) && SIZEOF(.app_hdr) == 16,
+          "app header must be 16 bytes at app base + 0x200" )
   .text :
   {
    . = ALIGN(4);

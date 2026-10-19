@@ -1,9 +1,9 @@
 {
   "module": "picohub",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "url": "https://raw.githubusercontent.com/buildwithnoknok/module-I2C-picohub-MOD-0011/main/firmware/bin/picohub.bin",
-  "layout": 2,
-  "size": 16112,
-  "crc32": "fcb68232",
+  "layout": 3,
+  "size": 16556,
+  "crc32": "2708fbf1",
   "released": "2026-10-19"
 }

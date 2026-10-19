@@ -34,7 +34,10 @@ firmware v0.2.0.
 - Brain pins (set in the brain's `settings.toml`): I2C bus A = GP10 (SDA) / GP11 (SCL), bus B =
   GP20 / GP21, PIO-USB = GP0 (D+) / GP1 (D−).
 - The brain library `noknok.py` ([brain-Pico](https://github.com/buildwithnoknok/brain-Pico))
-  finds the power manager during enumeration like any other module.
+  finds the power manager during enumeration like any other module and offers it as `c.picohub`
+  (`noknok.py` 1.16+): `status()`, `source_caps()`, `set_rail()`, `cycle_rail()`, `reset_pico()`,
+  `set_min_input_voltage()`, `clear_faults()`. API: brain-Pico README → *noknok PicoHub power
+  manager*; the protocol underneath: [`firmware/readme.md`](firmware/readme.md) → *I2C interface*.
 - Designing a mezzanine: start with `docs/spec.md` §6. A mezzanine powered from cluster A must gate its
   load with MEZZ_EN and start safely on anything from 5 to 20 V.
 

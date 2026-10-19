@@ -1,0 +1,39 @@
+Item #,Designator,Qty,Manufacturer,Mfg Part #,Description / Value,Vendor Part #,Note
+1,"C1, C6, C9, C12, C20, C22, C24, C26, C30, C31, C32, C38",12,YAGEO,CC0603KRX7R9BB104,0.1uF ±10% 50V X7R 0603,C14663,one 50 V reel for every 0.1 uF; Samsung CL10B104KB8NNNC C1591 (16-LED board) is out of stock at LCSC today
+2,"C2, C3",2,Samsung,CL31B475KBHNNNE,4.7uF ±10% 50V X7R 1206,C51205,"PD input caps (sink capacitance <= 10 uF). Moved 1210 -> 1206 on 24 Sep: same X7R/50 V, 36% less area, 45% cheaper; ~10% more DC-bias loss, irrelevant here"
+3,"C4, C5, C7, C15, C17, C27, C28, C29, C33",9,Samsung,CL10B105KB8NQNC,1uF ±10% 50V X7R 0603,C5199872,C4 (ME6203 input); same reel as the other 1 uF; same part as the 16-LED board
+4,C8,1,Samsung,CL32B106KBJNNNE,10uF ±10% 50V X7R 1210,C138687,buck input cap
+5,"C10, C11",2,Samsung,CL21A226MPQNNNE,22uF ±20% 10V X5R 0805,C29277,buck output caps; alt FOJAN FCC0805X226M100FT C5137600 (146k stock)
+6,C13,1,FH,0603CG750J500NT,75pF ±5% 50V C0G 0603,C1681,Samsung CL10C750JB8NNNC is discontinued
+7,"C14, C16, C18, C34",4,Samsung,CL21A106KAYNNNE,10uF ±10% 25V X5R 0805,C15850,LDO outputs
+8,"C19, C21, C23, C25",4,Samsung,CL21A475KAQNNNE,4.7uF ±10% 25V X5R 0805,C1779,port bulk caps
+9,C35,1,Samsung,CL10B223KB8NNNC,22nF ±10% 50V X7R 0603,C21122,TPS54302 EN delay cap (~38 ms default-on)
+10,"C36, C37",2,Samsung,CL10B102KB8NNNC,1nF ±10% 50V X7R 0603,C1588,ADC filter at PA3/PA4
+11,"D1, D2, D6, D7, D8, D9, D10, D11, D12, D13, D14, D15, D16, D17, D18",15,onsemi,ESD9B5.0ST5G,"ESD TVS 5V working, SOD-923",C111566,same part as the 16-LED board
+12,D3,1,GOODWORK,SMAJ24A,"TVS 24V standoff, 38.9V clamp, 400W, SMA, unidirectional",C908774,MDD C113962 out of stock; Littelfuse C148222 as a name-brand alternative
+13,D4,1,Hubei KENTO,KT-0603R,LED red 0603,C2286,the noknok status LED
+14,D5,1,MDD,SS34,Schottky 40V 3A SMA,C8678,VSYS OR-ing diode
+15,F1,1,LUTE,2920L500/30GR,"PTC resettable fuse 5A hold, 30V, 2920",C19078763,"30 V (was 24 V): more headroom on the PD voltage steps, cheaper, 47k in stock vs 18k. Hold current derates to ~3.5 A at 60 C ambient - see spec 2.1"
+16,"J1, J2",2,HRO,TYPE-C-31-M-12,"USB-C receptacle 16-pin, 20V/5A, 10k cycles",C165948,host port; PD input
+17,"J3, J4, J5, J6",4,JST,SM04B-SRSS-TB(LF)(SN),JST SH 4-pin horizontal (Qwiic),C160404,same as all modules
+18,"J14, J15",2,CONNFLY,DS1023-1x20SF11,"Female header 1x20, 2.54 mm, THT, 8.5 mm insulator, gold — Pico socket half (J14 = pins 1-20, J15 = pins 21-40)",C7509519,one of the two socket halves (J14/J15); the Pico 2 W (SC1633) is bought separately and plugged in. Split into two designators so the position file reports two correct centroids - JLCPCB rejected the single-footprint version.
+19,L1,1,Chilisin,AMRU00060630100MA1,"10uH moulded power inductor, Isat 4A, 7.3x6.8mm",C2981193,buck inductor
+20,"R1, R2",2,UNI-ROYAL,0603WAF5101T5E,5.1k ±1% 0603,C23186,"PD Rd, 1% needed"
+21,R3,1,JIERR,JER2512F3R010,"10mOhm ±1% 3W alloy current-sense resistor 2512, ±50ppm",C46634450,input shunt for the INA180A2
+22,R4,1,UNI-ROYAL,0603WAF1001T5E,1k ±1% 0603,C21190,
+23,"R5, R8, R9, R10, R11, R12, R14, R29, R30, R31, R33",11,UNI-ROYAL,0603WAF1003T5E,100k ±1% 0603,C25803,1% because R5 is the buck feedback top resistor
+24,"R6, R15, R17, R18, R37",5,UNI-ROYAL,0603WAF1002T5E,10k ±1% 0603,C25804,
+25,R7,1,UNI-ROYAL,0603WAF2201T5E,2.2k ±1% 0603,C4190,status LED
+26,R13,1,UNI-ROYAL,0603WAF1332T5E,13.3k ±1% 0603,C25952,buck feedback bottom
+27,"R16, R34",2,UNI-ROYAL,0603WAF4701T5E,4.7k ±1% 0603,C23162,SY6280 Rset (1.45 A)
+28,"R19, R20",2,UNI-ROYAL,0603WAF2202T5E,22k ±1% 0603,C31850,host-port Rp
+29,"R21, R22",2,UNI-ROYAL,0603WAF220JT5E,22R ±1% 0603,C23345,USB D+/D- series
+30,"R23, R24, R25, R26",4,UNI-ROYAL,0603WAF3301T5E,3.3k ±1% 0603,C22978,I2C pull-ups
+31,"R27, R28, R35, R36",4,UNI-ROYAL,0603WAF4702T5E,47k ±1% 0603,C25819,host-port CC sense divider (R27/R28 series + R35/R36 to GND)
+32,TH1,1,KUU,KNTC0603/10KF3950,"NTC thermistor 10k ±1%, B3950 (B25/85) ±1%, 0603, -40 to +125 C",C2892547,"board temperature sensor (TH1) beside U2; low leg of a 10k divider into X035 pin 16 (PB1/A9; corrected 18 Oct 2026, DEV-117)"
+33,U1,1,WCH,CH32X035G8U6,"RISC-V MCU with USB-PD PHY, QFN-28",C7437027,power manager
+34,U2,1,TI,TPS54302DDCR,"3A synchronous buck, 4.5-28V in, TSOT-23-6",C311983,5 V buck
+35,"U3, U7, U8, U11",4,Silergy,SY6280AAC,"load switch with adjustable current limit, SOT-23-5",C55136,"USB host, bus A, bus B"
+36,U4,1,TI,INA180A2IDBVR,"current-sense amplifier 50 V/V, SOT-23-5",C192764,input current
+37,U5,1,Microne,ME6203A33M3G,"3.3V LDO, 40V in, SOT-23",C87842,always-on X035 supply
+38,"U6, U9",2,Diodes Inc,AP2114H-3.3TRG1,"3.3V 1A LDO, SOT-223",C150716,bus A / bus B LDOs

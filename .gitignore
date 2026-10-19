@@ -1,0 +1,23 @@
+datasheets/
+
+*.lck
+*-backups/
+
+_autosave-*
+# PCB plugin transient output
+hardware/kicad/*.kicad_pcb.zip
+# ad-hoc bundles made for sharing; git is the source of truth
+PicoHub_for_*.zip
+
+# VS Code Local History extension - a git repo of its own, 5 MB of editor snapshots
+.history/
+
+# kicad-cli report output, regenerated on every verification run
+*-erc.rpt
+*-drc.rpt
+
+# Fabrication Toolkit output, regenerated from the PCB
+production/
+
+# KiCad per-user view settings
+*.kicad_prl

@@ -6,8 +6,8 @@
 	(paper "A3")
 	(title_block
 		(title "MOD-0011 - Power rails")
-		(date "2026-09-21")
-		(rev "0.2")
+		(date "2026-10-23")
+		(rev "1.1")
 		(company "noknok")
 	)
 	(lib_symbols

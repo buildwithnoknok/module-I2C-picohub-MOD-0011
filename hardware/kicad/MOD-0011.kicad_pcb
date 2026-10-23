@@ -30903,7 +30903,7 @@
 		(layer "Edge.Cuts")
 		(uuid "5ec448f5-fe71-499f-92c8-0baa6c8d87c7")
 	)
-	(gr_text "MOD-0011\nRev 1.0\nSep 26"
+	(gr_text "MOD-0011\nRev 1.1\nOct 26"
 		(at 147.6 84.3 0)
 		(layer "F.SilkS")
 		(uuid "f988563c-2a64-4ea6-9118-b33ff89bf71a")

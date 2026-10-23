@@ -140,14 +140,26 @@ USB_VBUS at J2 (D18 — a 5 V clamp; the 6 V-max SY6280 sits behind it); 1 µF a
 (C27–C29); 100 nF at the INA180 supply pin (C30); 100 nF at the two ADC divider outputs V_IN /
 V_5V (C31, C32); 10 k
 pull-up on MEZZ_CS to +3V3_MCU (R33) so a mezzanine SPI device stays deselected while the Pico
-boots. Not added, on purpose: ESD on the mezzanine pads (internal, screwed interface) and host-side
-15 k pull-downs on USB D± (Pico-PIO-USB enables the RP2040's internal ones; MOD-0008 enumerated
-that way). I2C-port ESD stays on the hub: SDA/SCL are shared nets, so one pair per bus clamps a
+boots. Not added, on purpose: ESD on the mezzanine pads (internal, screwed interface). I2C-port ESD stays on the hub: SDA/SCL are shared nets, so one pair per bus clamps a
 discharge entering at any socket, hub or module — the modules themselves carry none.
 
 **Firmware rule (from the same review):** the X035's own I2C link to the Pico is on bus A, whose
 pull-ups sit on the switchable +3V3_A. A bus power-cycle must therefore always be **timed**
 (e.g. 250 ms) and never "off until told" — with bus A off the Pico cannot ask for it back.
+
+**USB host pull-downs: missing in rev 1.0, added in rev 1.1 (DEV-45, 23 Oct 2026).** Rev 1.0 has no
+host-side pull-downs on USB D±; it relied on the Pico's internal ones (Pico-PIO-USB enables them, which
+works on an RP2040). On the Pico 2 W's RP2350 (A2 stepping) an input with the internal pull-down latches
+high (erratum **RP2350-E9**), so D+ never falls when a device leaves and the PIO-USB host never sees the
+disconnect: a USB module that restarts (OTA) or is unplugged and re-plugged is not found again until the
+brain hard-resets. **Rev 1.1 adds 5.1 k from USB_DP and from USB_DN to GND** (0603 1 %, LCSC C23186, the
+part already used for R1/R2), placed on the Pico side of R21/R22, next to GP0/GP1. Below the USB 15 k
+nominal on purpose: Raspberry Pi's E9 guidance is an external pull-down of 8.2 k or less. With a device's
+1.5 k pull-up D+ idles at about 2.55 V (V_IH 2.0 V); about 0.5 mA flows only while a device is attached.
+Bench proof on rev 1.0 (CircuitPython 10.3.1, LEDs 16x on J2), with about 5 k (2 × 10 k in parallel) per
+line from Pico pins 1/2 to GND: 10/10 re-attaches, 20/20 USB firmware updates and 5/5 J2 power cycles in
+one host session, against 0 of 10 without them. Rev 1.0 boards: the brain's hard-reset update path
+(DEV-133) still covers USB updates; two hand-fitted resistors also fix unplug/re-plug.
 
 ### 2.2 Regulator values (from datasheets)
 
@@ -235,7 +247,7 @@ Rewritten 18 Oct 2026. Since 17 Oct 2026 the noknok I2C pins are configuration, 
 
 | Function | Pico GPIO | Socket pin | Notes |
 | --- | --- | --- | --- |
-| PIO-USB D+ / D- | GP0 / GP1 | 1 / 2 | via R21/R22 22 ohm to J2 and mezzanine cluster D. D+ must be the lower GPIO |
+| PIO-USB D+ / D- | GP0 / GP1 | 1 / 2 | via R21/R22 22 ohm to J2 and mezzanine cluster D. D+ must be the lower GPIO. Rev 1.1: 5.1 k pull-down to GND on each (RP2350-E9, see section 2) |
 | I2C bus A SDA / SCL | GP10 / GP11 | 14 / 15 | J3, J4, mezzanine cluster C, X035 |
 | I2C bus B SDA / SCL | GP20 / GP21 | 26 / 27 | J5, J6 |
 | Mezzanine SPI MISO / CS / SCK / MOSI | GP16 / GP17 / GP18 / GP19 | 21 / 22 / 24 / 25 | SPI0. CS: R33 100 k pull-up |

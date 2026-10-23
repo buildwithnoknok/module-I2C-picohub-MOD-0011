@@ -18,7 +18,7 @@ Item #,Designator,Qty,Manufacturer,Mfg Part #,Description / Value,Vendor Part #,
 17,"J3, J4, J5, J6",4,JST,SM04B-SRSS-TB(LF)(SN),JST SH 4-pin horizontal (Qwiic),C160404,same as all modules
 18,"J14, J15",2,CONNFLY,DS1023-1x20SF11,"Female header 1x20, 2.54 mm, THT, 8.5 mm insulator, gold — Pico socket half (J14 = pins 1-20, J15 = pins 21-40)",C7509519,one of the two socket halves (J14/J15); the Pico 2 W (SC1633) is bought separately and plugged in. Split into two designators so the position file reports two correct centroids - JLCPCB rejected the single-footprint version.
 19,L1,1,Chilisin,AMRU00060630100MA1,"10uH moulded power inductor, Isat 4A, 7.3x6.8mm",C2981193,buck inductor
-20,"R1, R2",2,UNI-ROYAL,0603WAF5101T5E,5.1k ±1% 0603,C23186,"PD Rd, 1% needed"
+20,"R1, R2, R39, R40",4,UNI-ROYAL,0603WAF5101T5E,5.1k ±1% 0603,C23186,"R1/R2 PD Rd, 1% needed. R39/R40 USB D+/D- pull-downs (rev 1.1, RP2350 erratum E9, keep <= 8.2k, DEV-45)"
 21,R3,1,JIERR,JER2512F3R010,"10mOhm ±1% 3W alloy current-sense resistor 2512, ±50ppm",C46634450,input shunt for the INA180A2
 22,R4,1,UNI-ROYAL,0603WAF1001T5E,1k ±1% 0603,C21190,
 23,"R5, R8, R9, R10, R11, R12, R14, R29, R30, R31, R33",11,UNI-ROYAL,0603WAF1003T5E,100k ±1% 0603,C25803,1% because R5 is the buck feedback top resistor

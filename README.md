@@ -27,6 +27,7 @@ firmware v0.3.0, updatable over I2C from the brain (noknok I2C bootloader, flash
 | `hardware/MOD-0011-schematic.pdf` | Schematic as PDF |
 | `hardware/MOD-0011-bom.csv` | Bill of materials: designators, manufacturer part numbers, LCSC codes |
 | `firmware/` | Power-manager firmware (ch32fun): source, binaries, `index.json` for updates, test and debug tools. **The I2C command map is in [`firmware/readme.md`](firmware/readme.md).** `firmware/bringup/` holds the bring-up and diagnostics firmware |
+| `mechanical/housing.json` | Housing profile (outline, mounting holes, connector positions and exits, heights, vent) for the [noknok housing configurator](https://buildwithnoknok.github.io/housing-configurator/), taken from the rev 1.0 KiCad PCB |
 | `CHANGELOG.md` | Version history |
 
 ## Using it

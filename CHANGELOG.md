@@ -4,6 +4,13 @@ Newest first. One entry per version bump, written in the same commit as the bump
 `## <version> - <date>` then `- DEV-xx - what changed and why. Breaking: yes/no.`
 Convention: Confluence "Development Conventions" (SD space, page 120160257).
 
+## Housing profile - 2026-10-29
+
+- DEV-171 - New `mechanical/housing.json` (schema noknok-housing/1) for the housing configurator,
+  derived from the rev 1.0 KiCad PCB: 80 x 40 outline, 8 edge mounting holes, USB-C POWER (S) and
+  HOST (N), 4 JST-SH ports, plugged-in Pico 2 W as a keepout, full-board vent grille. clearance_top is
+  provisional until calipered. Firmware unchanged. Breaking: no.
+
 ## 0.3.0 - 2026-10-19
 
 - DEV-124 - Field update over I2C: the power manager now runs behind the noknok I2C bootloader

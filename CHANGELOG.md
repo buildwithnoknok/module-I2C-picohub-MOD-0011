@@ -4,6 +4,18 @@ Newest first. One entry per version bump, written in the same commit as the bump
 `## <version> - <date>` then `- DEV-xx - what changed and why. Breaking: yes/no.`
 Convention: Confluence "Development Conventions" (SD space, page 120160257).
 
+## 0.3.1 - 2026-11-05
+
+- DEV-195 - Cold start: the 5 V buck is no longer switched off when it is already running. C35 (22 nF)
+  lets the TPS54302 self-start ~38 ms after power-up, but this app only runs after ~60 ms (WCH
+  factory bootloader + noknok bootloader first), so the PD-negotiation hold switched a running rail
+  off: every module got a ~60 ms power pulse, ~0.5 s at ~0.2 V and a second power-up (scope, old Pi4
+  rig, 3 of 3 cold starts). The noknok Display's CH32V003 sometimes stayed dead after that (DEV-195).
+  Now the app reads V_5V first: at or above 1.5 V the rail stays on and PD negotiates with the board
+  running (the same as a board without firmware and as a warm start); below, the hold works as
+  before. Scope after the change: one clean ramp. Hardware follow-up: rev 1.1 C35 = 100 nF (DEV-201)
+  gives the hold its time back. Not yet tested with a PD charger (9-20 V). Breaking: no.
+
 ## Housing profile - 2026-10-29
 
 - DEV-171 - New `mechanical/housing.json` (schema noknok-housing/1) for the housing configurator,

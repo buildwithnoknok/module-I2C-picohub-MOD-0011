@@ -168,8 +168,11 @@ one host session, against 0 of 10 without them. Rev 1.0 boards: the brain's hard
   C_BOOT = 100 nF, R_top = 100 k, R_bot = 13.3 k (→ 5.08 V), C_ff = 75 pF.
   **EN (added 24 Sep 2026):** to X035 **PB7** (pin 18) with **C35 = 22 nF to GND** and *no* pull-down.
   EN floating = enabled (internal ~0.7 µA pull-up), so the 22 nF gives a **~38 ms default-on delay**:
-  the X035 is alive within ~2 ms (ME6203 is always-on), pulls EN low, holds the 5 V rail off through
-  PD negotiation and releases it once the contract stands — and if the firmware never runs, the cap
+  the X035 is meant to pull EN low first, hold the 5 V rail off through
+  PD negotiation and release it once the contract stands. **Measured (DEV-195, 5 Nov 2026): the X035
+  app only runs after ~60 ms** (factory bootloader + noknok bootloader first), so on rev 1.0 the buck
+  has already started; firmware 0.3.1 then leaves it on instead of switching it off again. Rev 1.1:
+  C35 = 100 nF (~170 ms, DEV-201) — and if the firmware never runs, the cap
   charges anyway and the board comes up at 5 V. The axiom holds: the X035 can *delay* and *shut down*
   the rail, it cannot prevent it. It is also the only way the X035 can kill the whole 5 V rail on
   over-current or over-temperature. A divider from VBUS_PD to EN is **not** allowed — EN's absolute

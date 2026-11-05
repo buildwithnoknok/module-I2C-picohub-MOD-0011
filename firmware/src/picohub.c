@@ -51,7 +51,7 @@
 #define FW_VERSION_MAJOR 0
 #define FW_VERSION_MINOR 3
 #ifndef FW_VERSION_PATCH   // overridable for a bench test image: make EXTRA_CFLAGS=-DFW_VERSION_PATCH=1
-#define FW_VERSION_PATCH 0
+#define FW_VERSION_PATCH 1
 #endif
 
 // noknok bootloader application header (DEV-124): 16 bytes at app base + 0x200 (placed by app.ld).
@@ -88,6 +88,7 @@ const app_hdr_t app_hdr = { 0x31414B4Eu, 0x35333058u, 3,
 #define SINK_DETACH_MS        20
 #define MEZZ_PRESENT_MS       50
 #define BUCK_HOLD_MAX_MS     500  // cold start: buck held off at most this long
+#define V5_ALREADY_UP_MV    1500  // cold start: 5 V rail above this = the buck already self-started, no hold (DEV-195)
 #define STEP_UP_DELAY_MS     200  // cold start: 5 V contract + buck on, rails settle, then 9 V
 #define NO_PD_AFTER_MS      1000  // attached, no Source_Capabilities -> 5 V-only source
 #define PD_REPLY_TIMEOUT_MS 1000  // no Accept / PS_RDY -> soft reset and try again
@@ -813,22 +814,31 @@ int main( void )
 	bool cold = flags & RST_PORF;   // check POWER-ON first: the factory bootloader always adds SOFTWARE
 
 	funGpioInitAll();
-	if( cold ) line_drive_low( P_EN_BUCK );   // hold the 5 V rail through PD negotiation (C35 gives ~38 ms)
+	adc_init();
+	for( int i = 0; i < 6; i++ ) adc_step();   // V_5V before deciding on the hold
+	// Cold start: hold the 5 V rail through PD negotiation - but only if it is not up yet.
+	// DEV-195: C35 (22 nF) lets the buck self-start after ~38 ms, and this app only runs after
+	// ~60 ms (factory bootloader + noknok bootloader first). Switching a running rail off gave
+	// every module a ~60 ms power pulse, ~0.5 s off and a second power-up; the noknok Display
+	// sometimes stayed dead after that. A rail that is already up stays up: the same as a board
+	// with no firmware (spec: "comes up at 5 V") and as a warm start. Rev 1.1 C35 = 100 nF (DEV-201)
+	// gives the hold its time back.
+	bool v5_up = hub.v5_mv >= V5_ALREADY_UP_MV;
+	bool hold = cold && !v5_up;
+	if( hold ) line_drive_low( P_EN_BUCK );
 	funDigitalWrite( P_LED, FUN_HIGH );
 	funPinMode( P_LED, GPIO_CFGLR_OUT_10Mhz_PP );
-	adc_init();
 
 	hub.reset_cause = cold ? RC_POWER_ON : ( flags & RST_IWDGF ) ? RC_WATCHDOG : ( flags & RST_SFTF ) ? RC_SOFTWARE : RC_OTHER;
-	hub.rails = RAIL_BUS_A | RAIL_BUS_B | ( cold ? 0 : RAIL_BUCK );   // matches the lines as they are now
+	hub.rails = RAIL_BUS_A | RAIL_BUS_B | ( hold ? 0 : RAIL_BUCK );   // matches the lines as they are now
 	hub.wish_bus_b = WISH_ON;
 	hub.wish_j2 = WISH_AUTO;
 	hub.wish_mezz = WISH_AUTO;
 	hub.pd_state = PD_NEGOTIATING;
 	hub.contract_mv = 5000;
 
-	for( int i = 0; i < 6; i++ ) adc_step();   // first readings
 	pr.boot_t = pr_boot_ms = millis();
-	pr.buck_hold = cold;
+	pr.buck_hold = hold;
 	pr.step_up_pending = cold;
 	pr.buck_on_t = pr.boot_t;
 	pd.idx = pd.req_idx = -1;
@@ -856,6 +866,8 @@ int main( void )
 	     FW_VERSION_MAJOR, FW_VERSION_MINOR, FW_VERSION_PATCH, (unsigned long)flags,
 	     cold ? "power-on" : hub.reset_cause == RC_WATCHDOG ? "watchdog" : hub.reset_cause == RC_SOFTWARE ? "software" : "other" );
 	help();
+	if( cold ) LOG( "cold start: 5 V rail %u mV at app start -> %s\n", hub.v5_mv,
+	                hold ? "buck held through PD negotiation" : "already up, no hold (DEV-195)" );
 
 	uint32_t last_ms = millis(), last_policy = 0, last_print = 0;
 	bool hang = false;

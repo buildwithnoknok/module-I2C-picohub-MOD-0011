@@ -7,6 +7,13 @@ Bus A = GP10 (SDA) / GP11 (SCL). Finds the X035 at the enumeration address 0x7F 
 TEST_ADDR) or, if it is already assigned, by probing 0x08..0x77 for a power manager. Then checks
 every command of the command map (module README). Prints PASS/FAIL per check and a summary.
 Set RESET_PICO_AT_END = True to finish with RESET_PICO (the Pico reboots; the script ends there).
+
+DEV-143 (firmware 0.4.0): SET_MIN accepts 12, the new SET_FIXED_INPUT_VOLTAGE 0x24, and a minimum or a
+fixed level the charger does not offer EXACTLY answers 2. Phases for the "fixed survives a Pico reset"
+check (driver file on the Pico: PHASE = "fixed_set"; exec(open("/picohub_i2c_test.py").read())):
+  PHASE = "all"          every check below (default)
+  PHASE = "fixed_set"    set FIXED_V (default 15 V), check the contract, then RESET_PICO (the X035 pulls RUN)
+  PHASE = "fixed_check"  after that reset: the fixed level and the contract must still be there; then FIXED 0
 """
 import time
 import board
@@ -15,6 +22,14 @@ import busio
 TEST_ADDR = 0x60
 RESET_PICO_AT_END = False
 KEY = 0x5A
+try:
+    PHASE
+except NameError:
+    PHASE = "all"
+try:
+    FIXED_V
+except NameError:
+    FIXED_V = 15
 
 i2c = busio.I2C(board.GP11, board.GP10, frequency=100000)
 while not i2c.try_lock():
@@ -98,9 +113,43 @@ def find_power_manager():
     return None, "not found"
 
 
+def wait_contract(addr, mv, secs=4.0):
+    """Poll the status until the contract is mv (a renegotiation takes ~0.5-1.5 s); last status."""
+    t0 = time.monotonic()
+    s = status(addr)
+    while time.monotonic() - t0 < secs and not (s and s["pd"] == 2 and s["mv"] == mv):
+        time.sleep(0.2)
+        s = status(addr)
+    return s
+
+
 addr, how = find_power_manager()
 check("found the power manager (type 0x07)", addr is not None, how)
 if addr is None:
+    raise SystemExit
+
+if PHASE in ("fixed_set", "fixed_check"):
+    caps = cmd_read(addr, 0x11, 30)
+    pdo_mv = [u16(caps, 1 + 4 * i) for i in range(min(caps[0], 7))]
+    fmv = FIXED_V * 1000
+    print("charger offers", pdo_mv, "mV")
+    if PHASE == "fixed_set":
+        r = cmd_result(addr, [0x24, FIXED_V])
+        s = wait_contract(addr, fmv)
+        check("SET_FIXED %d -> contract %d mV" % (FIXED_V, fmv), r == 0 and s and s["mv"] == fmv and s["inputs"] & 0x20,
+              "result %d, %s" % (r, s))
+        print("RESET_PICO with key: the Pico reboots in ~50 ms; run PHASE fixed_check next")
+        write(addr, [0x22, 100, 0, KEY])
+        raise SystemExit
+    s = status(addr)
+    check("after the Pico reset: fixed flag + contract %d mV kept" % fmv,
+          s and s["mv"] == fmv and s["inputs"] & 0x20 and not s["notices"] & 0x40, str(s))
+    r = cmd_result(addr, [0x24, 0])
+    s = wait_contract(addr, 9000 if 9000 in pdo_mv else s["mv"], 40)
+    check("SET_FIXED 0 -> fixed flag off, back to demand", r == 0 and s and not s["inputs"] & 0x20,
+          "contract %s mV" % (s and s["mv"]))
+    passed = sum(1 for _, ok in results if ok)
+    print("SUMMARY %d/%d passed" % (passed, len(results)))
     raise SystemExit
 
 v = cmd_read(addr, 0xB1, 4)
@@ -128,7 +177,10 @@ check("SET_RAIL MEZZ auto", cmd_result(addr, [0x20, 3, 2]) == 0)
 
 check("CYCLE_RAIL without key refused", cmd_result(addr, [0x21, 0, 250, 0, 0]) == 3)
 check("RESET_PICO without key refused", cmd_result(addr, [0x22, 100, 0, 0]) == 3)
-check("SET_MIN_INPUT_VOLTAGE 12 V refused", cmd_result(addr, [0x23, 12]) == 3)
+check("SET_MIN_INPUT_VOLTAGE 13 V refused (invalid)", cmd_result(addr, [0x23, 13]) == 3)
+check("SET_FIXED_INPUT_VOLTAGE 5 V refused (invalid)", cmd_result(addr, [0x24, 5]) == 3)
+check("SET_FIXED_INPUT_VOLTAGE 13 V refused (invalid)", cmd_result(addr, [0x24, 13]) == 3)
+check("SET_FIXED_INPUT_VOLTAGE without value refused", cmd_result(addr, [0x24]) == 3)
 
 # bus A power cycle, 3 times: the X035 must restore bus A and answer at the same address
 for i in range(3):
@@ -153,6 +205,46 @@ r = cmd_result(addr, [0x23, 0])
 time.sleep(1.5)
 s = status(addr)
 check("SET_MIN_INPUT_VOLTAGE 0 -> back to 9 V", s and s["mv"] == (9000 if 9000 in pdo_mv else s["mv"]) and not s["inputs"] & 0x08,
+      "contract %s mV" % (s and s["mv"]))
+
+# DEV-143: a minimum is met only by that exact level (0.3.x answered 0 when any higher PDO existed).
+# Step-down after a minimum takes up to 30 s of low demand, so wait for 9 V between the checks.
+for v in (12, 15, 20):
+    r = cmd_result(addr, [0x23, v])
+    time.sleep(1.5)
+    s = status(addr)
+    if v * 1000 in pdo_mv:
+        check("SET_MIN %d (offered) -> result 0, contract %d" % (v, v * 1000), r == 0 and s and s["mv"] == v * 1000,
+              "result %d, contract %s" % (r, s and s["mv"]))
+    else:
+        check("SET_MIN %d (NOT offered) -> result 2, notice 0x20, no other voltage" % v,
+              r == 2 and s and s["notices"] & 0x20 and s["mv"] < v * 1000, "result %d, %s" % (r, s))
+    cmd_result(addr, [0x23, 0])
+    wait_contract(addr, 9000 if 9000 in pdo_mv else s["mv"], 40)
+
+# DEV-143: SET_FIXED holds the contract at exactly that level, ignores the minimum; not offered -> 2
+for v in (9, 12, 15, 20):
+    r = cmd_result(addr, [0x24, v])
+    if v * 1000 in pdo_mv:
+        s = wait_contract(addr, v * 1000)
+        ok = r == 0 and s and s["mv"] == v * 1000 and s["inputs"] & 0x20 and not s["notices"] & 0x40
+        if ok and v < 20 and 20000 in pdo_mv:   # a minimum above the fixed level must NOT move it
+            cmd_result(addr, [0x23, 20])
+            time.sleep(1.5)
+            s2 = status(addr)
+            ok = s2 and s2["mv"] == v * 1000
+            cmd_result(addr, [0x23, 0])
+        check("SET_FIXED %d (offered) -> contract %d, held against SET_MIN 20" % (v, v * 1000), ok,
+              "result %d, %s" % (r, s))
+    else:
+        time.sleep(1.5)
+        s = status(addr)
+        check("SET_FIXED %d (NOT offered) -> result 2, notice 0x40, stays on demand" % v,
+              r == 2 and s and s["notices"] & 0x40 and s["mv"] != v * 1000 and s["inputs"] & 0x20,
+              "result %d, %s" % (r, s))
+r = cmd_result(addr, [0x24, 0])
+s = wait_contract(addr, 9000 if 9000 in pdo_mv else s["mv"], 40)
+check("SET_FIXED 0 -> back to demand (9 V)", r == 0 and s and not s["inputs"] & 0x20 and not s["notices"] & 0x40,
       "contract %s mV" % (s and s["mv"]))
 
 check("CLEAR_FAULTS", cmd_result(addr, [0x12]) == 0)

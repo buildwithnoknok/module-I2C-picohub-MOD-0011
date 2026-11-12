@@ -21,12 +21,12 @@ adds the USB-PD contract, the USB host port J2, the mezzanine 5 V, and protectio
 | Watchdog | ~1 s independent watchdog. |
 | Firmware update | Over I2C from the brain, through the noknok I2C bootloader (DEV-124), see "Firmware update" below. |
 
-| Input voltage (v0.2) | Chosen by the board by demand: 9 V; up to 15 then 20 V when the input current stays above 80 % of the contract for 2 s; one level down when the input power stays below 60 % of the next lower level for 30 s. The brain may set a **minimum** (15/20 V) for a mezzanine that needs it; heat never lowers the voltage. |
+| Input voltage (v0.4) | Chosen by the board by demand: 9 V; one level up (12, 15, 20 V - whichever the charger offers) when the input current stays above 80 % of the contract for 2 s, but only to a level that gives at least 10 % more power than the current one (a 20 W charger's 12 V/1.67 A is not more than its 9 V/2.22 A); one level down when the input power stays below 60 % of the next lower level for 30 s. The brain may set a **minimum** (12/15/20 V) for a mezzanine that needs it, or a **fixed** level (9/12/15/20 V) that overrides demand and the minimum; heat never lowers the voltage. |
 
 **All thresholds are placeholders** until the load tests (DEV-117 step 6); they live at the top of
 `src/picohub.c`.
 
-## I2C interface (v0.3.0, DEV-122 + DEV-124) - the command map
+## I2C interface (v0.4.0, DEV-122 + DEV-124 + DEV-143) - the command map
 
 This section is the authoritative spec of the power manager's I2C protocol. Design reasoning is
 recorded in noknok's decision record ADR-004. Principle: everything inside the board is decided by the
@@ -56,7 +56,8 @@ too little power, 3 invalid (bad length, value or key), 0xFF unknown command.
 | `0x20` | SET_RAIL | `[0x20, rail, want]` | result. rail 1 bus B, 2 J2 (USB host VBUS), 3 MEZZ_EN; want 0 off, 1 on, 2 auto. Bus A has no id |
 | `0x21` | CYCLE_RAIL | `[0x21, rail, ms lo, ms hi, 0x5A]` | result. Off for ms, then back to the wish. rail 0 = bus A (50-2000 ms; the only way bus A ever goes off), 1-3 as above (50-5000 ms). Starts 20 ms after the write |
 | `0x22` | RESET_PICO | `[0x22, ms lo, ms hi, 0x5A]` | result. PICO_RUN low for ms (10-1000), 50 ms after the write |
-| `0x23` | SET_MIN_INPUT_VOLTAGE | `[0x23, volts]` | result. 0 = none, 15 or 20. Result 2 if the charger cannot reach it (the board takes the highest it can) |
+| `0x23` | SET_MIN_INPUT_VOLTAGE | `[0x23, volts]` | result. 0 = none, 12, 15 or 20 (12 from 0.4.0). Result 2 if the charger does not offer exactly that level (the board takes the highest level below it, notice 0x20) |
+| `0x24` | SET_FIXED_INPUT_VOLTAGE | `[0x24, volts]` | result (0.4.0). 0 = off, 9, 12, 15 or 20. Holds the contract at exactly that level; demand and the minimum are ignored. Result 2 if the charger does not offer it: the board stays on its demand level (never a substitute voltage), notice 0x40 |
 
 **Wishes and interlocks.** Defaults after power-up: bus B on, J2 auto, MEZZ_EN auto. Whatever the
 wish: J2 only with a device detected on its CC lines, never while a mezzanine asserts MEZZ_PRESENT,
@@ -64,8 +65,8 @@ on a 5 V-only charger only if it offers at least 1.5 A, off during an over-curre
 MEZZ_EN auto = on while MEZZ_PRESENT is asserted (a mezzanine that does not assert it is switched on
 by its product, wish "on"); off on MEZZ_FAULT, over-current level 2, heat shed, 3-sheds suspension.
 J2 "auto" with no device answers 0 (it will switch on when one comes); J2 "on" with no device answers 1.
-Wishes and the minimum survive a Pico reboot and an X035 watchdog reset; a power loss restores the
-defaults.
+Wishes, the minimum and the fixed level survive a Pico reboot and an X035 watchdog reset; a power loss
+restores the defaults.
 
 **GET_STATUS (20 bytes).**
 
@@ -77,13 +78,14 @@ defaults.
 | 6-7 / 8-9 / 10-11 | V_IN mV / I_IN mA (resolution ~10 mA) / 5 V rail mV |
 | 12-13 | temperature, signed, 0.1 C (NTC next to the buck) |
 | 14 | rails on: 01 bus A, 02 bus B, 04 J2, 08 MEZZ_EN, 10 buck |
-| 15 | inputs: 01 J2 device, 02 MEZZ_PRESENT, 04 MEZZ_FAULT, 08 minimum set, 10 minimum suspended (3 sheds) |
+| 15 | inputs: 01 J2 device, 02 MEZZ_PRESENT, 04 MEZZ_FAULT, 08 minimum set, 10 minimum suspended (3 sheds), 20 fixed level set |
 | 16 | faults, latched until CLEAR_FAULTS: 01 input over-current, 02 heat shed, 04 heat critical (buck was off), 08 mezzanine fault, 10 5 V rail low, 20 PD failed, 40 temperature sensor open/short |
-| 17 | notices, live: 01 limited power (5 V-only charger, not an error), 02 weak charger (< 15 W), 04 hot, 08 J2 held off by MEZZ_PRESENT, 10 J2 held off for power, 20 minimum not met |
+| 17 | notices, live: 01 limited power (5 V-only charger, not an error), 02 weak charger (< 15 W), 04 hot, 08 J2 held off by MEZZ_PRESENT, 10 J2 held off for power, 20 minimum not met, 40 fixed level not offered |
 | 18 | X035 reset cause: 0 power-on, 1 watchdog, 2 other, 3 software/debugger |
 | 19 | CRC8 of bytes 0-18 |
 
-Bench test: `test/picohub_i2c_test.py` (runs on the Pico, 22 checks); `test/conductor_enum_test.py`
+Bench test: `test/picohub_i2c_test.py` (runs on the Pico, 33 checks; `PHASE = "fixed_set"` /
+`"fixed_check"` test the fixed level across a RESET_PICO); `test/conductor_enum_test.py`
 (the brain Conductor's view).
 
 ## Status LED (D4)
@@ -178,7 +180,8 @@ contract, V_IN, V_5V, I_IN, temperature, J2 CC lines, and the rails / inputs / f
 | --- | --- |
 | `s` | status now |
 | `p` | J1 CC levels (which comparator thresholds each CC line is above) + PD receive/transmit counters |
-| `v` | minimum input voltage 0 -> 15 -> 20 -> 0 V (same as SET_MIN_INPUT_VOLTAGE) |
+| `v` | minimum input voltage 0 -> 12 -> 15 -> 20 -> 0 V (same as SET_MIN_INPUT_VOLTAGE) |
+| `f` | fixed input voltage 0 -> 9 -> 12 -> 15 -> 20 -> 0 V (same as SET_FIXED_INPUT_VOLTAGE) |
 | `e` | forget the I2C address and enumerate again (bench) |
 | `c` | clear latched faults (and a 3-sheds suspension) |
 | `t` / `T` | add 5 C to the temperature reading (simulated heat) / remove the offset |

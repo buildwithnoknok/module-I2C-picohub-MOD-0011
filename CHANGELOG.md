@@ -4,6 +4,22 @@ Newest first. One entry per version bump, written in the same commit as the bump
 `## <version> - <date>` then `- DEV-xx - what changed and why. Breaking: yes/no.`
 Convention: Confluence "Development Conventions" (SD space, page 120160257).
 
+## 0.4.0 - 2026-11-12
+
+- DEV-143 - 12 V is a demand level: the input voltage now steps 9 -> 12 -> 15 -> 20 V, using only
+  the levels the charger offers, and only up to a level that gives at least 10 % more power than the
+  current one. Many 20 W chargers offer 9 V/2.22 A and 12 V/1.67 A (both 20 W); a step to 12 V there
+  put a 1.8 A load over the 12 V current limit (bench: over-current fault), so the board now stays at 9 V.
+- DEV-143 - `0x23 SET_MIN_INPUT_VOLTAGE` also accepts 12. A minimum counts as met only when the
+  charger offers exactly that level (0.3.x answered 0 for 15 V on a 9/20 V charger and stayed at 9 V);
+  otherwise result 2 and notice 0x20, and the board takes the highest level below it.
+- DEV-143 - New `0x24 SET_FIXED_INPUT_VOLTAGE` (0 = off, 9, 12, 15, 20): holds the contract at exactly
+  that level and ignores demand and the minimum. A level the charger does not offer: result 2, notice
+  0x40, and the board stays on its demand level (never a substitute voltage). Status inputs bit 0x20 =
+  fixed level set. Survives a Pico reboot and an X035 warm reset (also a bootloader visit); a power loss
+  clears it. Breaking: no (0.3.x keep cells are read as "no fixed level").
+- Image size 17,512 B (0.3.1: 16,768 B).
+
 ## 0.3.1 - 2026-11-05
 
 - DEV-195 - Cold start: the 5 V buck is no longer switched off when it is already running. C35 (22 nF)

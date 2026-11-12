@@ -419,7 +419,8 @@ static void i2c_module_step( uint32_t now )
 	// policy: every line is released, i.e. the hardware defaults (bus A + B on, buck on, J2 and
 	// MEZZ_EN off). The charger keeps the contract it has (9 V by default); the new app re-reads the
 	// capabilities with a soft reset at its warm start. The brain's wishes and our address stay in
-	// the KEEP cell, so the new app comes back at the same address.
+	// the KEEP cell; the new app enumerates again at 0x7F (see i2c_module_start) and the brain
+	// assigns it an address.
 	static uint32_t enter_bl_at;
 	if( act_enter_bl && !enter_bl_at ) { enter_bl_at = now + 20; if( !enter_bl_at ) enter_bl_at = 1; ev( EV_ENTER_BL, 0 ); }
 	if( enter_bl_at && (int32_t)( now - enter_bl_at ) >= 0 )

@@ -702,7 +702,13 @@ static uint16_t level_ma( uint16_t mv )   // the source's current at a fixed vol
 	return 0;
 }
 
-static uint16_t next_level( uint16_t cur, int dir )   // next fixed PDO voltage up/down, 9..20 V
+static uint32_t level_mw( uint16_t mv ) { return (uint32_t)mv * level_ma( mv ) / 1000; }
+
+// Next fixed PDO voltage up/down, 9..20 V. Up only to a level that gives at least 10 % MORE power than
+// the current one (10 %: 12 V x 1.67 A = 20.04 W vs 9 V x 2.22 A = 19.98 W is "equal"): many 20 W chargers offer 9 V/2.22 A and 12 V/1.67 A (both 20 W), and a step to 12 V there
+// would put a load that drew 1.8 A at 9 V over the 12 V current limit (bench, DEV-143: fault 0x01,
+// V_IN sagged to 10 V).
+static uint16_t next_level( uint16_t cur, int dir )
 {
 	USBPD_SPR_CapabilitiesMessage_t * caps;
 	size_t n = USBPD_GetCapabilities( &caps );
@@ -712,7 +718,7 @@ static uint16_t next_level( uint16_t cur, int dir )   // next fixed PDO voltage 
 		if( !pdo_fixed( &caps->Source[i] ) ) continue;
 		uint16_t mv = caps->Source[i].FixedSupply.VoltageIn50mV * 50;
 		if( mv < 9000 || mv > 20000 ) continue;
-		if( dir > 0 && mv > cur && ( !best || mv < best ) ) best = mv;
+		if( dir > 0 && mv > cur && level_mw( mv ) * 10 > level_mw( cur ) * 11 && ( !best || mv < best ) ) best = mv;
 		if( dir < 0 && mv < cur && mv > best ) best = mv;
 	}
 	return best;

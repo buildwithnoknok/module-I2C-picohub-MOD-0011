@@ -113,11 +113,12 @@ def find_power_manager():
     return None, "not found"
 
 
-def wait_contract(addr, mv, secs=4.0):
-    """Poll the status until the contract is mv (a renegotiation takes ~0.5-1.5 s); last status."""
+def wait_contract(addr, mv, secs=4.0, flag=0):
+    """Poll the status until the contract is mv (a renegotiation takes ~0.5-1.5 s) and, if given, the
+    inputs flag is set (the flag appears on the next policy pass, even when the contract is already mv)."""
     t0 = time.monotonic()
     s = status(addr)
-    while time.monotonic() - t0 < secs and not (s and s["pd"] == 2 and s["mv"] == mv):
+    while time.monotonic() - t0 < secs and not (s and s["pd"] == 2 and s["mv"] == mv and s["inputs"] & flag == flag):
         time.sleep(0.2)
         s = status(addr)
     return s
@@ -135,7 +136,7 @@ if PHASE in ("fixed_set", "fixed_check"):
     print("charger offers", pdo_mv, "mV")
     if PHASE == "fixed_set":
         r = cmd_result(addr, [0x24, FIXED_V])
-        s = wait_contract(addr, fmv)
+        s = wait_contract(addr, fmv, flag=0x20)
         check("SET_FIXED %d -> contract %d mV" % (FIXED_V, fmv), r == 0 and s and s["mv"] == fmv and s["inputs"] & 0x20,
               "result %d, %s" % (r, s))
         print("RESET_PICO with key: the Pico reboots in ~50 ms; run PHASE fixed_check next")
@@ -226,7 +227,7 @@ for v in (12, 15, 20):
 for v in (9, 12, 15, 20):
     r = cmd_result(addr, [0x24, v])
     if v * 1000 in pdo_mv:
-        s = wait_contract(addr, v * 1000)
+        s = wait_contract(addr, v * 1000, flag=0x20)
         ok = r == 0 and s and s["mv"] == v * 1000 and s["inputs"] & 0x20 and not s["notices"] & 0x40
         if ok and v < 20 and 20000 in pdo_mv:   # a minimum above the fixed level must NOT move it
             cmd_result(addr, [0x23, 20])

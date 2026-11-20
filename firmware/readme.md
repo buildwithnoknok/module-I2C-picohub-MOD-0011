@@ -49,6 +49,7 @@ too little power, 3 invalid (bad length, value or key), 0xFF unknown command.
 | Cmd | Name | Write | Read |
 | --- | --- | --- | --- |
 | `0xB1` | GET_VERSION | `[0xB1]` | 4 B: protocol 1, major, minor, patch |
+| `0xB4` | GET_ID | `[0xB4]` | 10 B: `[UID x8][0x07][CRC8]`, the same reply as at `0x7F` during enumeration (ADR-005, since 0.4.0). The X035 bootloader answers it at `0x7E` too (stage-1 1.1.0) |
 | `0xB0` | ENTER_BOOTLOADER | `[0xB0]` | result 0; ~20 ms later the X035 resets into its bootloader at `0x7E` (see "Firmware update") |
 | `0x10` | GET_STATUS | `[0x10]` | 20 B, see below |
 | `0x11` | GET_SOURCE_CAPS | `[0x11]` | 1 B count n, n x {mV u16, max mA u16} (fixed PDOs), CRC8 |

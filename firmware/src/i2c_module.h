@@ -10,7 +10,8 @@
  *     Conductor assigns with [0x1D, addr]. Not assigned within 200 ms -> short re-backoff.
  *   - The assigned address and the brain's wishes are kept in a RAM cell over a warm reset of the
  *     X035 (watchdog, debugger), so the brain never loses the power manager; a power-on clears it.
- *   - Command map (README.md of this repo): 0xB1 GET_VERSION, 0xB0 ENTER_BOOTLOADER (DEV-124),
+ *   - Command map (README.md of this repo): 0xB1 GET_VERSION, 0xB4 GET_ID (ADR-005, DEV-21),
+ *     0xB0 ENTER_BOOTLOADER (DEV-124),
  *     0x10 GET_STATUS, 0x11 GET_SOURCE_CAPS, 0x12 CLEAR_FAULTS, 0x20 SET_RAIL, 0x21 CYCLE_RAIL,
  *     0x22 RESET_PICO, 0x23 SET_MIN_INPUT_VOLTAGE.
  * Every command is decoded in the I2C ISR at STOP; anything that switches hardware is handed to
@@ -23,6 +24,7 @@
 #define REG_ASSIGN_ADDR  0x1D
 #define CMD_ENTER_BOOTLOADER 0xB0
 #define CMD_GET_VERSION  0xB1
+#define CMD_GET_ID       0xB4   // ADR-005 (DEV-21): next read = the 10-byte enumeration reply
 #define CMD_GET_STATUS   0x10
 #define CMD_GET_CAPS     0x11
 #define CMD_CLEAR_FAULTS 0x12
@@ -51,7 +53,7 @@ typedef struct { uint32_t magic; uint8_t addr, wish_bus_b, wish_j2, wish_mezz; u
 #define KEEP ( (volatile keep_t *)0x20004400 )
 
 enum { I2C_BOOT_WAITING, I2C_ENUM_READY, I2C_ASSIGNING, I2C_ASSIGNED };
-enum { RD_RESULT, RD_VERSION, RD_STATUS, RD_CAPS };
+enum { RD_RESULT, RD_VERSION, RD_STATUS, RD_CAPS, RD_ID };
 
 static volatile uint8_t i2c_state = I2C_BOOT_WAITING;
 static volatile uint8_t i2c_addr, i2c_new_addr;
@@ -165,6 +167,7 @@ static void decode_command( void )
 	switch( c )
 	{
 	case CMD_GET_VERSION: read_kind = RD_VERSION; return;
+	case CMD_GET_ID:      read_kind = RD_ID; return;      // [UID x8][0x07][CRC8], like at 0x7F
 	case CMD_GET_STATUS:  read_kind = RD_STATUS; return;
 	case CMD_GET_CAPS:    read_kind = RD_CAPS; return;
 	case CMD_ENTER_BOOTLOADER: act_enter_bl = true; last_result = RES_APPLIED; return;   // main loop resets
@@ -272,6 +275,7 @@ void I2C1_EV_IRQHandler( void )
 			else switch( read_kind )
 			{
 			case RD_VERSION: build_version(); break;
+			case RD_ID:      build_uid(); break;
 			case RD_STATUS:  build_status(); break;
 			case RD_CAPS:    build_caps(); break;
 			default:         tx_buf[0] = last_result; tx_len = 1; break;

@@ -4,6 +4,10 @@ Newest first. One entry per version bump, written in the same commit as the bump
 `## <version> - <date>` then `- DEV-xx - what changed and why. Breaking: yes/no.`
 Convention: Confluence "Development Conventions" (SD space, page 120160257).
 
+## 0.4.0 - 2026-11-20
+
+- DEV-21 - answers the new standard command `0xB4` GET_ID (ADR-005): write `[0xB4]`, the next read returns the 10-byte identity `[UID x8][0x07][CRC8]`, identical to the 0x7F enumeration reply; decoded in the I2C ISR at STOP like every command. `0xB1` and `PROTOCOL_VERSION` unchanged. The app header stays 16 bytes: the X035 stage-1 1.1.0 (DEV-22) reports the fixed type 0x07 at 0x7E. Built with the agent-hq toolchain (ch32fun 95030fd), not yet on the bench toolchain; not tested on hardware. Breaking: no.
+
 ## Full image - 2026-11-19
 
 - DEV-197 - `firmware/bin/picohub_swd.bin` (the full SWD image, unchanged) is now recorded in `firmware/full.json` and checked by `tools/mk_full_image.py --check`. Built from released parts by the new `tools/mk_full_image.py`; `--check` fails when the full image no longer matches `firmware/index.json`, which still points at the app-only OTA image. README: how to flash it, and why the app image must never go to `0x08000000`. No firmware change. Breaking: no.

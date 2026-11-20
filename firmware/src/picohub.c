@@ -49,9 +49,9 @@
 #include "usbpd.h"
 
 #define FW_VERSION_MAJOR 0
-#define FW_VERSION_MINOR 3
+#define FW_VERSION_MINOR 4
 #ifndef FW_VERSION_PATCH   // overridable for a bench test image: make EXTRA_CFLAGS=-DFW_VERSION_PATCH=1
-#define FW_VERSION_PATCH 1
+#define FW_VERSION_PATCH 0
 #endif
 
 // noknok bootloader application header (DEV-124): 16 bytes at app base + 0x200 (placed by app.ld).

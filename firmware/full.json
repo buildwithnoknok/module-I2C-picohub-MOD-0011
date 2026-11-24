@@ -6,13 +6,13 @@
   "file": "firmware/bin/picohub_swd.bin",
   "flash_at": "0x08000000",
   "size": 63488,
-  "crc32": "c9c89c1c",
+  "crc32": "4d67ae61",
   "app": {
     "source": "firmware/bin/picohub.bin",
-    "version": "0.4.0",
+    "version": "0.4.1",
     "offset": "0x1400",
-    "size": 17560,
-    "crc32": "28fab89d"
+    "size": 17640,
+    "crc32": "a04c3d52"
   },
   "bootloader": [
     {

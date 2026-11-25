@@ -21,14 +21,15 @@
  *     app with a software reset at every power-up, so a cold start = POWER-ON + SOFTWARE:
  *     the POWER-ON flag is checked first).
  *   - The noknok I2C module interface on bus A (i2c_module.h, DEV-122): enumeration as type 0x07,
- *     telemetry, steering commands. Input voltage by demand (9 -> 15 -> 20 V and back) and the
- *     brain's minimum input voltage.
+ *     telemetry, steering commands. Input voltage by demand (9 -> 12 -> 15 -> 20 V and back, every
+ *     level the charger offers), the brain's minimum input voltage, and a fixed input voltage
+ *     (SET_FIXED_INPUT_VOLTAGE, DEV-143) for devices that need exactly one voltage.
  *   - Field update over I2C (DEV-124): the noknok I2C bootloader (stage-0 + stage-1, layout 3) sits
  *     below this app. 0xB0 resets into it; the app header below lets it refuse foreign images; the
  *     boot-attempt counter is cleared once the brain reaches us (i2c_module.h).
  *
  * Debug link (`minichlink -T`, see ../readme.md): a status line every 2 s, and keys
- *   s status now   v cycle the voltage target 9 -> 15 -> 20 -> 9 V (bench test only)
+ *   s status now   v cycle the minimum 0/12/15/20 V   f cycle the fixed voltage 0/9/12/15/20 V
  *   c clear faults   t +5 C on the temperature reading (simulated heat)   T offset off
  *   w stop feeding the watchdog (reset test)   h help
  *
@@ -49,9 +50,9 @@
 #include "usbpd.h"
 
 #define FW_VERSION_MAJOR 0
-#define FW_VERSION_MINOR 3
+#define FW_VERSION_MINOR 4
 #ifndef FW_VERSION_PATCH   // overridable for a bench test image: make EXTRA_CFLAGS=-DFW_VERSION_PATCH=1
-#define FW_VERSION_PATCH 1
+#define FW_VERSION_PATCH 0
 #endif
 
 // noknok bootloader application header (DEV-124): 16 bytes at app base + 0x200 (placed by app.ld).
@@ -101,11 +102,12 @@ const app_hdr_t app_hdr = { 0x31414B4Eu, 0x35333058u, 3,
 // ------------------------------------------------------------------ status (exposed by DEV-122)
 enum { PD_NONE = 0, PD_NEGOTIATING = 1, PD_CONTRACT = 2, PD_FAILED = 3 };   // GET_STATUS byte 1
 enum { RAIL_BUS_A = 1 << 0, RAIL_BUS_B = 1 << 1, RAIL_J2 = 1 << 2, RAIL_MEZZ = 1 << 3, RAIL_BUCK = 1 << 4 };
-enum { IN_J2_SINK = 1 << 0, IN_MEZZ_PRESENT = 1 << 1, IN_MEZZ_FAULT = 1 << 2, IN_MIN_SET = 1 << 3, IN_MIN_SUSPENDED = 1 << 4 };
+enum { IN_J2_SINK = 1 << 0, IN_MEZZ_PRESENT = 1 << 1, IN_MEZZ_FAULT = 1 << 2, IN_MIN_SET = 1 << 3, IN_MIN_SUSPENDED = 1 << 4,
+       IN_FIXED_SET = 1 << 5 };
 enum { F_OVERCURRENT = 1 << 0, F_TEMP_SHED = 1 << 1, F_TEMP_CRIT = 1 << 2, F_MEZZ = 1 << 3,
        F_V5_UNDER = 1 << 4, F_PD_FAILED = 1 << 5, F_NTC = 1 << 6 };          // latched
 enum { N_5V_ONLY = 1 << 0, N_WEAK = 1 << 1, N_HOT = 1 << 2, N_J2_INTERLOCK = 1 << 3,
-       N_J2_POWER = 1 << 4, N_MIN_NOT_MET = 1 << 5 };                        // live
+       N_J2_POWER = 1 << 4, N_MIN_NOT_MET = 1 << 5, N_FIXED_NOT_MET = 1 << 6 };   // live
 enum { WISH_OFF = 0, WISH_ON = 1, WISH_AUTO = 2 };
 enum { RC_POWER_ON = 0, RC_WATCHDOG = 1, RC_OTHER = 2, RC_SOFTWARE = 3 };
 
@@ -118,7 +120,8 @@ static struct
 	uint8_t pd_state;
 	uint16_t contract_mv, contract_ma;
 	uint16_t target_mv;    // what the policy asks the charger for (9000 by default)
-	uint16_t min_mv;       // the brain's minimum input voltage (0, 15000, 20000)
+	uint16_t min_mv;       // the brain's minimum input voltage (0, 12000, 15000, 20000)
+	uint16_t fixed_mv;     // the brain's fixed input voltage (0 = off, 9000..20000), DEV-143
 	// rails, inputs, faults
 	uint8_t rails, inputs, faults, notices;
 	uint8_t wish_bus_b, wish_j2, wish_mezz;   // set by the brain (SET_RAIL)
@@ -301,6 +304,16 @@ static int pdo_choose( uint16_t target_mv )
 		if( mv <= target_mv && mv > best_mv ) { best = i; best_mv = mv; }
 	}
 	return best;
+}
+
+// Does the source offer a fixed PDO at exactly this voltage? (no caps yet = no)
+static bool pdo_level_offered( uint16_t mv )
+{
+	USBPD_SPR_CapabilitiesMessage_t * caps;
+	size_t n = USBPD_GetCapabilities( &caps );
+	for( size_t i = 0; i < n; i++ )
+		if( pdo_fixed( &caps->Source[i] ) && caps->Source[i].FixedSupply.VoltageIn50mV * 50 == mv ) return true;
+	return false;
 }
 
 // Type-C current from the source's Rp, read with the PD PHY's comparators on the active CC
@@ -509,7 +522,7 @@ static void pd_poll( uint32_t now )
 // Voltage target from a measured input voltage (warm start: keep what the source gives).
 static uint16_t mv_to_level( uint16_t mv )
 {
-	return mv > 17000 ? 20000 : mv > 12000 ? 15000 : mv > 7000 ? 9000 : 5000;
+	return mv > 17000 ? 20000 : mv > 13500 ? 15000 : mv > 10500 ? 12000 : mv > 7000 ? 9000 : 5000;
 }
 
 // ------------------------------------------------------------------ protection + interlocks
@@ -577,7 +590,7 @@ static void protect_and_switch( uint32_t now )
 	if( mfault ) { pr.mezz_fault_t = now; hub.faults |= F_MEZZ; }
 	bool mezz_fault_hold = mfault || ( pr.mezz_fault_t && now - pr.mezz_fault_t < MEZZ_FAULT_HOLD_MS );
 
-	hub.inputs = ( hub.inputs & ( IN_MIN_SET | IN_MIN_SUSPENDED ) ) |
+	hub.inputs = ( hub.inputs & ( IN_MIN_SET | IN_MIN_SUSPENDED | IN_FIXED_SET ) ) |
 	             ( pr.sink ? IN_J2_SINK : 0 ) | ( pr.present ? IN_MEZZ_PRESENT : 0 ) | ( mfault ? IN_MEZZ_FAULT : 0 );
 
 	// ---- source: limited power?
@@ -689,7 +702,13 @@ static uint16_t level_ma( uint16_t mv )   // the source's current at a fixed vol
 	return 0;
 }
 
-static uint16_t next_level( uint16_t cur, int dir )   // next fixed PDO voltage up/down, 9..20 V
+static uint32_t level_mw( uint16_t mv ) { return (uint32_t)mv * level_ma( mv ) / 1000; }
+
+// Next fixed PDO voltage up/down, 9..20 V. Up only to a level that gives at least 10 % MORE power than
+// the current one (10 %: 12 V x 1.67 A = 20.04 W vs 9 V x 2.22 A = 19.98 W is "equal"): many 20 W chargers offer 9 V/2.22 A and 12 V/1.67 A (both 20 W), and a step to 12 V there
+// would put a load that drew 1.8 A at 9 V over the 12 V current limit (bench, DEV-143: fault 0x01,
+// V_IN sagged to 10 V).
+static uint16_t next_level( uint16_t cur, int dir )
 {
 	USBPD_SPR_CapabilitiesMessage_t * caps;
 	size_t n = USBPD_GetCapabilities( &caps );
@@ -699,7 +718,7 @@ static uint16_t next_level( uint16_t cur, int dir )   // next fixed PDO voltage 
 		if( !pdo_fixed( &caps->Source[i] ) ) continue;
 		uint16_t mv = caps->Source[i].FixedSupply.VoltageIn50mV * 50;
 		if( mv < 9000 || mv > 20000 ) continue;
-		if( dir > 0 && mv > cur && ( !best || mv < best ) ) best = mv;
+		if( dir > 0 && mv > cur && level_mw( mv ) * 10 > level_mw( cur ) * 11 && ( !best || mv < best ) ) best = mv;
 		if( dir < 0 && mv < cur && mv > best ) best = mv;
 	}
 	return best;
@@ -707,7 +726,11 @@ static uint16_t next_level( uint16_t cur, int dir )   // next fixed PDO voltage 
 
 static void voltage_policy( uint32_t now )
 {
-	if( hub.pd_state == PD_CONTRACT && pd.req_idx < 0 && !pr.step_up_pending )
+	// DEV-143 fixed input voltage: when the source offers that exact level the contract is held there;
+	// demand, minimum and heat are ignored. Not offered: the board stays on its demand level (never
+	// a substitute voltage) and shows notice 0x40.
+	bool fixed = hub.fixed_mv && pdo_level_offered( hub.fixed_mv );
+	if( hub.pd_state == PD_CONTRACT && pd.req_idx < 0 && !pr.step_up_pending && !fixed )
 	{
 		uint16_t cur = hub.contract_mv;
 		uint16_t up = next_level( cur, +1 ), dn = next_level( cur, -1 );
@@ -719,11 +742,14 @@ static void voltage_policy( uint32_t now )
 		if( high && now - up_t >= DEMAND_UP_MS ) { if( up > demand_mv ) demand_mv = up; up_t = now; LOG( "demand: up to %u mV\n", up ); }
 		if( low && now - down_t >= DEMAND_DOWN_MS ) { demand_mv = dn; down_t = now; LOG( "demand: down to %u mV\n", dn ); }
 	}
+	if( fixed ) { up_t = now; down_t = now; }   // no stale demand timers when the fixed level is released
 	uint16_t min = pr.d8_suspended ? 0 : hub.min_mv;
-	uint16_t t = pr.step_up_pending ? 5000 : ( demand_mv > min ? demand_mv : min );
+	uint16_t t = pr.step_up_pending ? 5000 : fixed ? hub.fixed_mv : ( demand_mv > min ? demand_mv : min );
 	if( t != hub.target_mv ) { hub.target_mv = t; ev( EV_LEVEL, t ); }
 	if( hub.min_mv ) hub.inputs |= IN_MIN_SET; else hub.inputs &= ~IN_MIN_SET;
-	if( min && hub.pd_state != PD_NEGOTIATING && hub.contract_mv < min ) hub.notices |= N_MIN_NOT_MET;
+	if( hub.fixed_mv ) hub.inputs |= IN_FIXED_SET; else hub.inputs &= ~IN_FIXED_SET;
+	if( !fixed && min && hub.pd_state != PD_NEGOTIATING && hub.contract_mv < min ) hub.notices |= N_MIN_NOT_MET;
+	if( hub.fixed_mv && hub.pd_state != PD_NEGOTIATING && hub.contract_mv != hub.fixed_mv ) hub.notices |= N_FIXED_NOT_MET;
 }
 
 // ------------------------------------------------------------------ LED
@@ -760,9 +786,9 @@ static void print_status( void )
 {
 	static const char * pdn[] = { "no PD", "negotiating", "contract", "PD failed" };
 	int t = hub.temp_dc;
-	LOG( "%s %u mV/%u mA (target %u min %u) | V_IN %u V_5V %u I_IN %u mA | T %d.%d C | CC %u/%u | "
+	LOG( "%s %u mV/%u mA (target %u min %u fixed %u) |V_IN %u V_5V %u I_IN %u mA | T %d.%d C | CC %u/%u | "
 	     "rails %02x in %02x faults %02x notices %02x | i2c %s 0x%02x\n",
-	     pdn[hub.pd_state & 3], hub.contract_mv, hub.contract_ma, hub.target_mv, hub.min_mv,
+	     pdn[hub.pd_state & 3], hub.contract_mv, hub.contract_ma, hub.target_mv, hub.min_mv, hub.fixed_mv,
 	     hub.vin_mv, hub.v5_mv, hub.iin_ma, t / 10, ( t < 0 ? -t : t ) % 10,
 	     hub.cc1_mv, hub.cc2_mv, hub.rails, hub.inputs, hub.faults, hub.notices,
 	     i2c_state == I2C_ASSIGNED ? "addr" : "enum", i2c_state == I2C_ASSIGNED ? i2c_addr : ENUM_ADDR );
@@ -798,11 +824,12 @@ static void print_cc( void )
 
 static void help( void )
 {
-	LOG( "keys: s status  p J1 CC levels  v minimum voltage 0/15/20  e enumerate again  c clear faults  t +5 C  T temp offset off\n"
-	     "      w stop feeding the watchdog  h help\n"
-	     "rails: 01 bus A 02 bus B 04 J2 08 MEZZ_EN 10 buck | in: 01 J2 sink 02 mezz present 04 mezz fault\n"
+	LOG( "keys: s status  p J1 CC levels  v minimum voltage 0/12/15/20  f fixed voltage 0/9/12/15/20  e enumerate again\n"
+	     "      c clear faults  t +5 C  T temp offset off  w stop feeding the watchdog  h help\n"
+	     "rails: 01 bus A 02 bus B 04 J2 08 MEZZ_EN 10 buck | in: 01 J2 sink 02 mezz present 04 mezz fault 08 min set\n"
+	     "       10 min suspended 20 fixed set\n"
 	     "faults: 01 over-current 02 temp shed 04 temp crit 08 mezz 10 5V low 20 PD failed 40 NTC\n"
-	     "notices: 01 5V only 02 weak source 04 hot 08 J2 interlock 10 J2 power\n" );
+	     "notices: 01 5V only 02 weak source 04 hot 08 J2 interlock 10 J2 power 20 min not met 40 fixed not met\n" );
 }
 
 // ------------------------------------------------------------------ main
@@ -902,8 +929,11 @@ int main( void )
 			{
 			case 's': print_status(); break;
 			case 'p': print_cc(); break;
-			case 'v': hub.min_mv = hub.min_mv >= 20000 ? 0 : hub.min_mv >= 15000 ? 20000 : 15000;   // as SET_MIN_INPUT_VOLTAGE
+			case 'v': hub.min_mv = hub.min_mv >= 20000 ? 0 : hub.min_mv >= 15000 ? 20000 : hub.min_mv >= 12000 ? 15000 : 12000;   // as SET_MIN_INPUT_VOLTAGE
 			          LOG( "minimum input voltage %u mV\n", hub.min_mv ); break;
+			case 'f': hub.fixed_mv = hub.fixed_mv >= 20000 ? 0 : hub.fixed_mv >= 15000 ? 20000 : hub.fixed_mv >= 12000 ? 15000 :
+			                         hub.fixed_mv >= 9000 ? 12000 : 9000;   // as SET_FIXED_INPUT_VOLTAGE
+			          LOG( "fixed input voltage %u mV\n", hub.fixed_mv ); break;
 			case 'c': clear_faults(); LOG( "faults cleared\n" ); break;
 			case 'e': i2c_off(); KEEP->magic = 0; i2c_state = I2C_BOOT_WAITING;   // bench: enumerate again
 			          backoff_until = now + ( fnv_hash( 2166136261UL ) % 2500 ) + 300;

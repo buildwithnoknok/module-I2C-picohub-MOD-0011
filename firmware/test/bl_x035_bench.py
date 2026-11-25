@@ -88,16 +88,34 @@ def crc8(d):
     return c
 
 
-def find_hub(timeout=6.0):
+def free_addr(prefer=None):
+    """An address on bus A that nothing answers on: prefer (e.g. the PM's old address) if free,
+    else the first free one from 0x08. DEV-285: the old fixed 0x08 collided with the brain's
+    display at 0x08 (two chips on one address, replies AND-ed: 0xB1 read 0.4.0, 0xB4 read zeros)."""
+    for a in ([prefer] if prefer else []) + list(range(0x08, 0x78)):
+        if A.read(a, 1) is None:
+            return a
+    return None
+
+
+def find_hub(timeout=6.0, prefer=None):
     """Address of the power manager (answers GET_STATUS with format 1 and a good CRC8), or None.
-    Also handles a fresh enumeration at 0x7F (assigns 0x08)."""
+    Also handles a fresh enumeration at 0x7F: assigns a FREE address (prefer = the old one), never a
+    fixed one. 0x7F is polled every 20 ms for 1 s per round, because the app only listens there for
+    200 ms before it backs off again."""
     t0 = time.monotonic()
     while time.monotonic() - t0 < timeout:
-        r = A.read(0x7F, 10)
-        if r and r[8] == 0x07 and crc8(r[:9]) == r[9]:
-            A.write(0x7F, [0x1D, 0x08])
-            time.sleep(0.05)
-        for a in range(0x08, 0x78):
+        t1 = time.monotonic()
+        while time.monotonic() - t1 < 1.0:
+            r = A.read(0x7F, 10)
+            if r and r[8] == 0x07 and crc8(r[:9]) == r[9]:
+                na = free_addr(prefer)
+                A.write(0x7F, [0x1D, na])
+                time.sleep(0.05)
+                print("find_hub: assigned 0x%02x to UID %s" % (na, bytes(r[:8]).hex()))
+                break
+            time.sleep(0.02)
+        for a in ([prefer] if prefer else []) + list(range(0x08, 0x78)):
             if A.write(a, [0x10]):
                 b = A.read(a, 20)
                 if b and b[0] == 1 and crc8(b[:19]) == b[19]:
@@ -167,7 +185,7 @@ def bl_info():
     print("bus B while in the bootloader:", bus_b_alive())
     F.boot()
     time.sleep(1.0)
-    a2 = find_hub()
+    a2 = find_hub(prefer=a)
     check("app back after BOOT (same address)", a2 == a, "%s -> %s, app %s" % (hex(a), a2 and hex(a2), before))
     s = status(a2) if a2 else None
     print("status after BOOT", s)
@@ -199,7 +217,7 @@ def silence(secs=120):
     print("bus B in the bootloader:", bus_b)
     F.boot()
     time.sleep(1.5)
-    a2 = find_hub()
+    a2 = find_hub(prefer=a)
     s1 = status(a2) if a2 else None
     print("after:  ", s1)
     check("app back at the same address, warm (reset cause != power-on)",
@@ -259,7 +277,7 @@ def update(path):
     F.boot()
     took = time.monotonic() - t0
     time.sleep(1.5)
-    a2 = find_hub()
+    a2 = find_hub(prefer=a)
     after = app_version(a2) if a2 else None
     print("app before", before, "after", after, "address", hex(a), "->", a2 and hex(a2), "took %.1f s" % took)
     exp = tuple(img[0x200 + 12 + i] for i in (3, 2, 1, 0))   # app header version word, big end first

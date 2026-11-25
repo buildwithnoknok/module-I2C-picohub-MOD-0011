@@ -85,8 +85,10 @@ its ~3.5 A hot hold is margin rather than a limit.
 **Firmware: negotiate the lowest voltage that meets demand.** With no mezzanine present, request
 **9 V** rather than 20 V: the ME6203 then drops 5.7 V instead of 16.7 V (0.07 W instead of 0.20 W)
 and the buck's switching losses roughly halve — about **0.25 W less heat** in the housing, from the
-two parts that run hottest for their size. Step up to 15 V or 20 V when MEZZ_PRESENT is asserted or
-measured demand rises, and step back down when it falls. It also keeps the exposed cluster-A pads and
+two parts that run hottest for their size. Step up (12, 15 or 20 V, whichever the charger offers and
+gives more power) when MEZZ_PRESENT is asserted or measured demand rises, and step back down when it
+falls. As built (firmware 0.4.0) the brain can also set a minimum or a fixed level; see
+`firmware/readme.md`. It also keeps the exposed cluster-A pads and
 J1 at 9 V when no mezzanine is fitted.
 
 **Inrush.** Everything on the board is soft-started (TPS54302 internally, plus the four SY6280s), so

@@ -10,9 +10,10 @@
  *     Conductor assigns with [0x1D, addr]. Not assigned within 200 ms -> short re-backoff.
  *   - The assigned address and the brain's wishes are kept in a RAM cell over a warm reset of the
  *     X035 (watchdog, debugger), so the brain never loses the power manager; a power-on clears it.
- *   - Command map (README.md of this repo): 0xB1 GET_VERSION, 0xB0 ENTER_BOOTLOADER (DEV-124),
+ *   - Command map (README.md of this repo): 0xB1 GET_VERSION, 0xB4 GET_ID (ADR-005, DEV-21),
+ *     0xB0 ENTER_BOOTLOADER (DEV-124),
  *     0x10 GET_STATUS, 0x11 GET_SOURCE_CAPS, 0x12 CLEAR_FAULTS, 0x20 SET_RAIL, 0x21 CYCLE_RAIL,
- *     0x22 RESET_PICO, 0x23 SET_MIN_INPUT_VOLTAGE.
+ *     0x22 RESET_PICO, 0x23 SET_MIN_INPUT_VOLTAGE, 0x24 SET_FIXED_INPUT_VOLTAGE (DEV-143).
  * Every command is decoded in the I2C ISR at STOP; anything that switches hardware is handed to
  * the main loop, which applies the interlocks (the brain sets wishes, the board decides).
  */
@@ -23,6 +24,7 @@
 #define REG_ASSIGN_ADDR  0x1D
 #define CMD_ENTER_BOOTLOADER 0xB0
 #define CMD_GET_VERSION  0xB1
+#define CMD_GET_ID       0xB4   // ADR-005 (DEV-21): next read = the 10-byte enumeration reply
 #define CMD_GET_STATUS   0x10
 #define CMD_GET_CAPS     0x11
 #define CMD_CLEAR_FAULTS 0x12
@@ -30,6 +32,7 @@
 #define CMD_CYCLE_RAIL   0x21
 #define CMD_RESET_PICO   0x22
 #define CMD_SET_MIN_VIN  0x23
+#define CMD_SET_FIXED_VIN 0x24  // DEV-143: hold the contract at exactly one voltage (0 = off)
 #define KEY_BYTE         0x5A   // RESET_PICO and CYCLE_RAIL: a bus glitch must never trigger them
 #define STATUS_FORMAT    1
 
@@ -46,12 +49,14 @@ enum { RAILID_BUS_A = 0, RAILID_BUS_B = 1, RAILID_J2 = 2, RAILID_MEZZ = 3 };
 #define UID_LEN  8
 
 // Kept over a warm reset (outside .data/.bss, below the stack; the event log ends at 0x20004307)
+// fixed_mv + check2 (DEV-143) are appended behind the 0.3.x layout with their own check, so an
+// update from 0.3.x keeps the address and wishes and simply starts with no fixed voltage.
 #define KEEP_MAGIC 0x4E4B4B31u   // "NKK1"
-typedef struct { uint32_t magic; uint8_t addr, wish_bus_b, wish_j2, wish_mezz; uint16_t min_mv, check; } keep_t;
+typedef struct { uint32_t magic; uint8_t addr, wish_bus_b, wish_j2, wish_mezz; uint16_t min_mv, check, fixed_mv, check2; } keep_t;
 #define KEEP ( (volatile keep_t *)0x20004400 )
 
 enum { I2C_BOOT_WAITING, I2C_ENUM_READY, I2C_ASSIGNING, I2C_ASSIGNED };
-enum { RD_RESULT, RD_VERSION, RD_STATUS, RD_CAPS };
+enum { RD_RESULT, RD_VERSION, RD_STATUS, RD_CAPS, RD_ID };
 
 static volatile uint8_t i2c_state = I2C_BOOT_WAITING;
 static volatile uint8_t i2c_addr, i2c_new_addr;
@@ -143,14 +148,14 @@ static void build_caps( void )      // [n] + n x {mV u16, mA u16} (fixed PDOs on
 	tx_len = 2 + n * 4;
 }
 
-static bool pdo_offers( uint16_t mv )   // is there a fixed PDO at or above mv?
+// Is there a fixed PDO at exactly this voltage? (DEV-143: 0.3.x tested ">= mv", so SET_MIN 15 on a
+// 5/9/20 V charger answered "applied" although the board stays at 9 V: pdo_choose never goes above
+// the target.) pdo_level_offered() lives in picohub.c next to pdo_choose.
+static bool pdo_offers( uint16_t mv ) { return pdo_level_offered( mv ); }
+
+static bool volts_ok( uint8_t v, bool allow9 )   // 0 = off, else a ladder level
 {
-	USBPD_SPR_CapabilitiesMessage_t * caps;
-	size_t count = USBPD_GetCapabilities( &caps );
-	for( size_t i = 0; i < count; i++ )
-		if( caps->Source[i].Header.PDOType == eUSBPD_PDO_FIXED && caps->Source[i].FixedSupply.VoltageIn50mV * 50 >= mv )
-			return true;
-	return false;
+	return v == 0 || ( allow9 && v == 9 ) || v == 12 || v == 15 || v == 20;
 }
 
 // ------------------------------------------------------------------ command decode (ISR, at STOP)
@@ -165,6 +170,7 @@ static void decode_command( void )
 	switch( c )
 	{
 	case CMD_GET_VERSION: read_kind = RD_VERSION; return;
+	case CMD_GET_ID:      read_kind = RD_ID; return;      // [UID x8][0x07][CRC8], like at 0x7F
 	case CMD_GET_STATUS:  read_kind = RD_STATUS; return;
 	case CMD_GET_CAPS:    read_kind = RD_CAPS; return;
 	case CMD_ENTER_BOOTLOADER: act_enter_bl = true; last_result = RES_APPLIED; return;   // main loop resets
@@ -219,9 +225,18 @@ static void decode_command( void )
 	case CMD_SET_MIN_VIN:
 	{
 		uint8_t v = rx_buf[1];
-		if( rx_len != 2 || ( v != 0 && v != 15 && v != 20 ) ) { last_result = RES_INVALID; return; }
+		if( rx_len != 2 || !volts_ok( v, false ) ) { last_result = RES_INVALID; return; }
 		hub.min_mv = v * 1000;
 		last_result = ( v && hub.pd_state != PD_NEGOTIATING && !pdo_offers( hub.min_mv ) ) ? RES_FAULT_POWER : RES_APPLIED;
+		return;
+	}
+
+	case CMD_SET_FIXED_VIN:   // DEV-143: the contract is held at exactly this voltage; 0 = back to demand
+	{
+		uint8_t v = rx_buf[1];
+		if( rx_len != 2 || !volts_ok( v, true ) ) { last_result = RES_INVALID; return; }
+		hub.fixed_mv = v * 1000;
+		last_result = ( v && hub.pd_state != PD_NEGOTIATING && !pdo_offers( hub.fixed_mv ) ) ? RES_FAULT_POWER : RES_APPLIED;
 		return;
 	}
 
@@ -272,6 +287,7 @@ void I2C1_EV_IRQHandler( void )
 			else switch( read_kind )
 			{
 			case RD_VERSION: build_version(); break;
+			case RD_ID:      build_uid(); break;
 			case RD_STATUS:  build_status(); break;
 			case RD_CAPS:    build_caps(); break;
 			default:         tx_buf[0] = last_result; tx_len = 1; break;
@@ -329,6 +345,8 @@ static void keep_save( void )
 	KEEP->wish_bus_b = hub.wish_bus_b; KEEP->wish_j2 = hub.wish_j2; KEEP->wish_mezz = hub.wish_mezz;
 	KEEP->min_mv = hub.min_mv;
 	KEEP->check = KEEP->addr ^ ( KEEP->wish_bus_b << 2 ) ^ ( KEEP->wish_j2 << 4 ) ^ ( KEEP->wish_mezz << 6 ) ^ KEEP->min_mv ^ 0xA55A;
+	KEEP->fixed_mv = hub.fixed_mv;
+	KEEP->check2 = KEEP->fixed_mv ^ 0x5AA5;
 	KEEP->magic = KEEP_MAGIC;
 }
 
@@ -337,7 +355,13 @@ static bool keep_valid( void )
 	return KEEP->magic == KEEP_MAGIC &&
 	       KEEP->check == ( KEEP->addr ^ ( KEEP->wish_bus_b << 2 ) ^ ( KEEP->wish_j2 << 4 ) ^ ( KEEP->wish_mezz << 6 ) ^ KEEP->min_mv ^ 0xA55A ) &&
 	       KEEP->wish_bus_b <= WISH_AUTO && KEEP->wish_j2 <= WISH_AUTO && KEEP->wish_mezz <= WISH_AUTO &&
-	       ( KEEP->min_mv == 0 || KEEP->min_mv == 15000 || KEEP->min_mv == 20000 );
+	       ( KEEP->min_mv % 1000 == 0 && volts_ok( KEEP->min_mv / 1000, false ) );
+}
+
+static uint16_t keep_fixed( void )   // 0 when the cell comes from 0.3.x (no fixed field) or is damaged
+{
+	uint16_t f = KEEP->fixed_mv;
+	return ( KEEP->check2 == ( f ^ 0x5AA5 ) && f % 1000 == 0 && volts_ok( f / 1000, true ) ) ? f : 0;
 }
 
 // Called once from main(). Cold start: enumerate. Warm start with a valid cell: go straight back
@@ -350,6 +374,7 @@ static void i2c_module_start( bool cold, bool from_bootloader, uint32_t now )
 	{
 		hub.wish_bus_b = KEEP->wish_bus_b; hub.wish_j2 = KEEP->wish_j2; hub.wish_mezz = KEEP->wish_mezz;
 		hub.min_mv = KEEP->min_mv;
+		hub.fixed_mv = keep_fixed();
 		if( !from_bootloader && KEEP->addr >= 0x08 && KEEP->addr <= 0x77 )
 		{
 			i2c_slave_init( KEEP->addr );
@@ -398,7 +423,8 @@ static void i2c_module_step( uint32_t now )
 	// policy: every line is released, i.e. the hardware defaults (bus A + B on, buck on, J2 and
 	// MEZZ_EN off). The charger keeps the contract it has (9 V by default); the new app re-reads the
 	// capabilities with a soft reset at its warm start. The brain's wishes and our address stay in
-	// the KEEP cell, so the new app comes back at the same address.
+	// the KEEP cell; the new app enumerates again at 0x7F (see i2c_module_start) and the brain
+	// assigns it an address.
 	static uint32_t enter_bl_at;
 	if( act_enter_bl && !enter_bl_at ) { enter_bl_at = now + 20; if( !enter_bl_at ) enter_bl_at = 1; ev( EV_ENTER_BL, 0 ); }
 	if( enter_bl_at && (int32_t)( now - enter_bl_at ) >= 0 )

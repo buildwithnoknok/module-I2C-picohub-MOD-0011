@@ -276,6 +276,33 @@ void I2C1_EV_IRQHandler( void )
 	uint32_t star1 = I2C1->STAR1;
 	uint32_t star2 = I2C1->STAR2;   // reading STAR2 clears ADDR
 
+	// STOP first (DEV-287). A finished write is decoded exactly once and then forgotten:
+	//  - rx_len = 0 right after the decode, so a later STOPF that comes without an ADDR we handled
+	//    (a rebooting Pico's first bus traffic) can never decode the same bytes again. Before 0.4.1 a
+	//    write-only RESET_PICO stayed in rx_buf and was replayed -> RUN pulse -> boot loop.
+	//  - when STOPF of write N and ADDR of transaction N+1 arrive in one ISR entry, write N is decoded
+	//    before the ADDR branch below starts N+1 (before, ADDR cleared rx_len and write N was lost).
+	if( star1 & I2C_STAR1_STOPF )
+	{
+		if( star1 & I2C_STAR1_RXNE )   // a last byte still in DATAR belongs to this write
+		{
+			uint8_t b = (uint8_t)I2C1->DATAR;
+			if( rx_len < sizeof( rx_buf ) ) rx_buf[rx_len++] = b;
+		}
+		I2C1->CTLR1 |= I2C_CTLR1_PE;   // clears STOPF
+		if( i2c_state == I2C_ENUM_READY )
+		{
+			if( rx_len == 2 && rx_buf[0] == REG_ASSIGN_ADDR && rx_buf[1] >= 0x08 && rx_buf[1] <= 0x77 )
+			{
+				i2c_new_addr = rx_buf[1];
+				i2c_state = I2C_ASSIGNING;   // the address switch happens in the main loop
+			}
+		}
+		else if( i2c_state == I2C_ASSIGNED && rx_len > 0 ) decode_command();
+		rx_len = 0;                    // consumed: never decoded twice
+		I2C1->CTLR1 |= I2C_CTLR1_ACK;
+		if( !( star1 & I2C_STAR1_ADDR ) ) return;
+	}
 	if( star1 & I2C_STAR1_ADDR )
 	{
 		rx_len = 0;
@@ -306,21 +333,6 @@ void I2C1_EV_IRQHandler( void )
 	if( star1 & I2C_STAR1_TXE )
 	{
 		I2C1->DATAR = ( tx_idx < tx_len ) ? tx_buf[tx_idx++] : 0xFF;
-		return;
-	}
-	if( star1 & I2C_STAR1_STOPF )
-	{
-		I2C1->CTLR1 |= I2C_CTLR1_PE;   // clears STOPF
-		if( i2c_state == I2C_ENUM_READY )
-		{
-			if( rx_len == 2 && rx_buf[0] == REG_ASSIGN_ADDR && rx_buf[1] >= 0x08 && rx_buf[1] <= 0x77 )
-			{
-				i2c_new_addr = rx_buf[1];
-				i2c_state = I2C_ASSIGNING;   // the address switch happens in the main loop
-			}
-		}
-		else if( i2c_state == I2C_ASSIGNED && rx_len > 0 ) decode_command();
-		I2C1->CTLR1 |= I2C_CTLR1_ACK;
 		return;
 	}
 }

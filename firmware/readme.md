@@ -26,7 +26,7 @@ adds the USB-PD contract, the USB host port J2, the mezzanine 5 V, and protectio
 **All thresholds are placeholders** until the load tests (DEV-117 step 6); they live at the top of
 `src/picohub.c`.
 
-## I2C interface (v0.4.0, DEV-122 + DEV-124 + DEV-143 + DEV-21) - the command map
+## I2C interface (v0.4.1, DEV-122 + DEV-124 + DEV-143 + DEV-21 + DEV-287) - the command map
 
 This section is the authoritative spec of the power manager's I2C protocol. Design reasoning is
 recorded in noknok's decision record ADR-004. Principle: everything inside the board is decided by the
@@ -45,6 +45,10 @@ the command byte, then read. Values little-endian. Multi-byte replies end with a
 (polynomial 0x07, init 0, as in enumeration); on a bad CRC, retry once. A read after any other
 command returns its **result byte**: 0 applied, 1 held off by an interlock, 2 held off by a fault or
 too little power, 3 invalid (bad length, value or key), 0xFF unknown command.
+Every write is decoded once, at its STOP, and then discarded (since 0.4.1, DEV-287): reading the
+result byte is optional. Before 0.4.1 a write that was not followed by a read stayed in the receive
+buffer and could be decoded a second time at a later STOP (a write-only RESET_PICO rebooted the Pico
+again and again), and a write directly followed by the next transaction could be lost.
 
 | Cmd | Name | Write | Read |
 | --- | --- | --- | --- |

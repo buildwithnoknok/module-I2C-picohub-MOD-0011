@@ -4,6 +4,18 @@ Newest first. One entry per version bump, written in the same commit as the bump
 `## <version> - <date>` then `- DEV-xx - what changed and why. Breaking: yes/no.`
 Convention: Confluence "Development Conventions" (SD space, page 120160257).
 
+## 0.4.1 - 2026-11-24
+
+- DEV-287 - I2C: every write is decoded exactly once. The receive buffer was only cleared when the
+  next transaction started, so a command written without reading its result (e.g. `0x22` RESET_PICO
+  from a bench script) stayed in the buffer and was decoded again at a later STOP: the Pico was reset
+  again on its first bus traffic after each boot, a boot loop that only a power cut ended. The
+  interrupt now handles STOP first, decodes, then clears the buffer; a write whose STOP arrives
+  together with the next transaction's address is no longer lost either. Reading the result byte
+  (as `NoknokPicoHub` does) was never affected. Application only, no bootloader change. Breaking: no.
+- Image size 17,640 B, crc32 a04c3d52 (0.4.0: 17,560 B, 28fab89d). Built on the bench host (ch32fun 95030fd,
+  gcc 14.2.0), which rebuilds the 0.4.0 source byte-identical to 28fab89d. Full SWD image rebuilt.
+
 ## 0.4.0 - 2026-11-23
 
 - DEV-285 - ONE 0.4.0: the DEV-143 branch (`dev-143-picohub-040`, image crc32 9fb8cb0b) and the
